@@ -6,7 +6,7 @@ The YugaWare Helm chart documented here has been tested with the following softw
 
 - Kubernetes 1.10+
 - Helm 2.8.0+
-- YugaWare Docker Images 1.1.0+
+- Yugabyte repository
 - Kubernetes node with minimum 4 CPU core and 15 GB RAM can be allocated to YugaWare.
 
 Confirm that your `helm` is configured correctly.
@@ -27,7 +27,7 @@ Server: &version.Version{SemVer:"v2.10.0", GitCommit:"...", GitTreeState:"clean"
 For deploying a YugaWare helm chart we need have a service account which has cluster admin access, if the user in context already has that access you can skip this step.
 
 ```sh
-$ kubectl apply -f https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/cloud/kubernetes/helm/yugabyte-rbac.yaml
+$ kubectl apply -f https://raw.githubusercontent.com/yugabyte/charts/master/stable/yugabyte/yugabyte-rbac.yaml
 ```
 
 ```sh
@@ -50,12 +50,29 @@ Tiller (the Helm server-side component) has been upgraded to the current version
 Happy Helming!
 ```
 
-### Download YugaWare Helm Chart
+### Add Yugabyte repo which has both yugayte and yugaware
 
 You can do this as shown below.
 
 ```sh
-$ wget https://downloads.yugabyte.com/kubernetes/yugaware-1.0.0.tgz
+$ helm repo add yugabytedb https://charts.yugabyte.com
+```
+
+### Fetch updates from the repository
+
+```sh
+$ helm repo update
+```
+
+### Validate the chart version
+
+```sh
+$ helm search yugabytedb/yugaware
+```
+
+### Apply the secret file (license for yugaware) which you have received from the sales team
+```sh
+kubectl apply -f yugabyte-secret.yml -n yw-demo
 ```
 
 ### Install YugaWare
@@ -63,7 +80,7 @@ $ wget https://downloads.yugabyte.com/kubernetes/yugaware-1.0.0.tgz
 Install YugaWare in the Kubernetes cluster using the command below.
 
 ```sh
-$ helm install yugaware-1.0.0.tgz --name yb --set=image.tag=1.1.10.0-b3 --wait
+$ helm install yugabytedb/yugaware --namespace yw-demo --name yw-demo --wait
 ```
 
 ### Check the cluster status
@@ -71,76 +88,81 @@ $ helm install yugaware-1.0.0.tgz --name yb --set=image.tag=1.1.10.0-b3 --wait
 You can check the status of the cluster using various commands noted below.
 
 ```sh
-$ helm status yb
+$ helm status yw-demo
 ```
 
 ```sh
-LAST DEPLOYED: Wed Jan  2 14:12:27 2019
-NAMESPACE: default
+LAST DEPLOYED: Thu Nov 21 18:43:41 2019
+NAMESPACE: yw-demo
 STATUS: DEPLOYED
 
 RESOURCES:
-==> v1/ConfigMap
-NAME                           AGE
-yb-yugaware-global-config      14d
-yb-yugaware-app-config         14d
-yb-yugaware-nginx-config       14d
-yb-yugaware-prometheus-config  14d
-
-==> v1/PersistentVolumeClaim
-yb-yugaware-storage  14d
-
-==> v1/ServiceAccount
-yugaware  14d
-
 ==> v1/ClusterRole
-yugaware  14d
+NAME     AGE
+yw-demo  18h
 
 ==> v1/ClusterRoleBinding
-yugaware  14d
+NAME     AGE
+yw-demo  18h
 
-==> v1/Service
-yb-yugaware-ui  14d
+==> v1/ConfigMap
+NAME                                AGE
+yw-demo-yugaware-app-config         18h
+yw-demo-yugaware-global-config      18h
+yw-demo-yugaware-nginx-config       18h
+yw-demo-yugaware-prometheus-config  18h
 
-==> v1/StatefulSet
-yb-yugaware  14d
+==> v1/PersistentVolumeClaim
+NAME                      AGE
+yw-demo-yugaware-storage  18h
 
 ==> v1/Pod(related)
+NAME                AGE
+yw-demo-yugaware-0  144m
 
-NAME           READY  STATUS   RESTARTS  AGE
-yb-yugaware-0  5/5    Running  0         14d
+==> v1/Service
+NAME                 AGE
+yw-demo-yugaware-ui  18h
+
+==> v1/ServiceAccount
+NAME     AGE
+yw-demo  18h
+
+==> v1/StatefulSet
+NAME              AGE
+yw-demo-yugaware  18h
 ```
 
 Get service details.
 
 ```sh
-$ kubectl get svc -lapp=yb-yugaware
+$ kubectl get svc -lapp=yw-demo-yugaware -n yw-demo
 ```
 
 ```sh
-NAME             TYPE           CLUSTER-IP    EXTERNAL-IP      PORT(S)                       AGE
-yb-yugaware-ui   LoadBalancer   10.102.9.91   10.200.300.400   80:32495/TCP,9090:30087/TCP   15d
+NAME                  TYPE           CLUSTER-IP   EXTERNAL-IP   PORT(S)                       AGE
+yw-demo-yugaware-ui   LoadBalancer   10.0.18.5    34.68.1.65    80:30281/TCP,9090:32198/TCP   18h
 ```
 
-You can even check the history of the `yb` helm chart.
+You can even check the history of the `yw-demo` helm chart.
 
 ```sh
-$ helm history yb
+$ helm history yw-demo
 ```
 
 ```sh
-REVISION	UPDATED                 	STATUS  	CHART         	DESCRIPTION
-1       	Wed Jan  2 14:12:27 2019	DEPLOYED	yugaware-1.0.0	Install complete
+REVISION	UPDATED                 	STATUS  	CHART         	APP VERSION	 DESCRIPTION     
+1       	Thu Nov 21 18:43:41 2019	DEPLOYED	yugaware-2.0.4	2.0.4.0-b7 	 Install complete
 ```
 
 ### Upgrade YugaWare
 
 ```sh
-$ helm upgrade yb yugaware-1.0.0.tgz --set=image.tag=<new-tag> --wait
+$ helm upgrade yw-demo yugabytedb/yugaware --set Image.tag=2.0.5.2 --wait
 ```
 
 ### Delete YugaWare
 
 ```sh
-$ helm delete yb --purge
+$ helm delete yw-demo --purge
 ```
