@@ -117,6 +117,14 @@ YBCStatus YBCPgNewDropDatabase(YBCPgSession pg_session,
                                YBCPgStatement *handle);
 YBCStatus YBCPgExecDropDatabase(YBCPgStatement handle);
 
+// Alter database.
+YBCStatus YBCPgNewAlterDatabase(YBCPgSession pg_session,
+                               const char *database_name,
+                               YBCPgOid database_oid,
+                               YBCPgStatement *handle);
+YBCStatus YBCPgAlterDatabaseRenameDatabase(YBCPgStatement handle, const char *newname);
+YBCStatus YBCPgExecAlterDatabase(YBCPgStatement handle);
+
 // Reserve oids.
 YBCStatus YBCPgReserveOids(YBCPgSession pg_session,
                            YBCPgOid database_oid,
@@ -278,12 +286,9 @@ YBCStatus YBCPgDmlFetch(YBCPgStatement handle, int32_t natts, uint64_t *values, 
 // Utility method that checks stmt type and calls either exec insert, update, or delete internally.
 YBCStatus YBCPgDmlExecWriteOp(YBCPgStatement handle, int32_t *rows_affected_count);
 
-// This function adds a primary column to be used in the construction of the tuple id (ybctid).
-YBCStatus YBCPgDmlAddYBTupleIdColumn(YBCPgStatement handle, int attr_num, uint64_t datum,
-                                     bool is_null, const YBCPgTypeEntity *type_entity);
-
 // This function returns the tuple id (ybctid) of a Postgres tuple.
-YBCStatus YBCPgDmlGetYBTupleId(YBCPgStatement handle, uint64_t *ybctid);
+YBCStatus YBCPgDmlBuildYBTupleId(YBCPgStatement handle, const YBCPgAttrValueDescriptor *attrs,
+                                 int32_t nattrs, uint64_t *ybctid);
 
 // DB Operations: WHERE, ORDER_BY, GROUP_BY, etc.
 // + The following operations are run by DocDB.
@@ -376,6 +381,12 @@ bool YBCIsInitDbModeEnvVarSet();
 
 // This is called by initdb. Used to customize some behavior.
 void YBCInitFlags();
+
+// Retrieves value of ysql_max_read_restart_attempts gflag
+int32_t YBCGetMaxReadRestartAttempts();
+
+// Retrieves value of ysql_output_buffer_size gflag
+int32_t YBCGetOutputBufferSize();
 
 #ifdef __cplusplus
 }  // extern "C"

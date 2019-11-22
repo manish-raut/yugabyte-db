@@ -25,6 +25,7 @@
 #include "yb/util/pb_util.h"
 #include "yb/util/protobuf_util.h"
 #include "yb/util/string_util.h"
+#include "yb/util/encryption_util.h"
 #include "yb/cdc/cdc_service.h"
 #include "yb/client/client.h"
 #include "yb/master/master_defaults.h"
@@ -33,6 +34,9 @@ DECLARE_string(certs_dir);
 DECLARE_bool(use_client_to_server_encryption);
 
 namespace yb {
+
+using enterprise::EncryptionParams;
+
 namespace tools {
 namespace enterprise {
 
@@ -538,6 +542,94 @@ Status ClusterAdminClient::IsEncryptionEnabled() {
   return Status::OK();
 }
 
+Status ClusterAdminClient::AddUniverseKeyToAllMasters(
+    const std::string& key_id, const std::string& universe_key) {
+
+  RETURN_NOT_OK(EncryptionParams::IsValidKeySize(
+      universe_key.size() - EncryptionParams::kBlockSize));
+
+
+  master::AddUniverseKeysRequestPB req;
+  master::AddUniverseKeysResponsePB resp;
+  auto* universe_keys = req.mutable_universe_keys();
+  (*universe_keys->mutable_map())[key_id] = universe_key;
+
+  for (auto hp : VERIFY_RESULT(HostPort::ParseStrings(master_addr_list_, 7100))) {
+    rpc::RpcController rpc;
+    rpc.set_timeout(timeout_);
+    master::MasterServiceProxy proxy(proxy_cache_.get(), hp);
+    RETURN_NOT_OK_PREPEND(proxy.AddUniverseKeys(req, &resp, &rpc),
+                          Format("MasterServiceImpl::AddUniverseKeys call fails on host $0.",
+                                 hp.ToString()));
+    if (resp.has_error()) {
+      return StatusFromPB(resp.error().status());
+    }
+    std::cout << Format("Successfully added key to the node $0.\n", hp.ToString());
+  }
+
+  return Status::OK();
+}
+
+Status ClusterAdminClient::AllMastersHaveUniverseKeyInMemory(const std::string& key_id) {
+  master::HasUniverseKeyInMemoryRequestPB req;
+  master::HasUniverseKeyInMemoryResponsePB resp;
+  req.set_version_id(key_id);
+
+  for (auto hp : VERIFY_RESULT(HostPort::ParseStrings(master_addr_list_, 7100))) {
+    rpc::RpcController rpc;
+    rpc.set_timeout(timeout_);
+    master::MasterServiceProxy proxy(proxy_cache_.get(), hp);
+    RETURN_NOT_OK_PREPEND(proxy.HasUniverseKeyInMemory(req, &resp, &rpc),
+                          "MasterServiceImpl::ChangeEncryptionInfo call fails.");
+
+    if (resp.has_error()) {
+      return StatusFromPB(resp.error().status());
+    }
+
+    std::cout << Format("Node $0 has universe key in memory: $1\n", hp.ToString(), resp.has_key());
+  }
+
+  return Status::OK();
+}
+
+Status ClusterAdminClient::RotateUniverseKeyInMemory(const std::string& key_id) {
+  RETURN_NOT_OK_PREPEND(WaitUntilMasterLeaderReady(), "Wait for master leader failed!");
+  rpc::RpcController rpc;
+  rpc.set_timeout(timeout_);
+
+  master::ChangeEncryptionInfoRequestPB req;
+  master::ChangeEncryptionInfoResponsePB resp;
+  req.set_encryption_enabled(true);
+  req.set_in_memory(true);
+  req.set_version_id(key_id);
+  RETURN_NOT_OK_PREPEND(master_proxy_->ChangeEncryptionInfo(req, &resp, &rpc),
+                        "MasterServiceImpl::ChangeEncryptionInfo call fails.");
+  if (resp.has_error()) {
+    return StatusFromPB(resp.error().status());
+  }
+
+  std::cout << "Rotated universe key in memory\n";
+  return Status::OK();
+}
+
+Status ClusterAdminClient::DisableEncryptionInMemory() {
+  RETURN_NOT_OK_PREPEND(WaitUntilMasterLeaderReady(), "Wait for master leader failed!");
+  rpc::RpcController rpc;
+  rpc.set_timeout(timeout_);
+
+  master::ChangeEncryptionInfoRequestPB req;
+  master::ChangeEncryptionInfoResponsePB resp;
+  req.set_encryption_enabled(false);
+  RETURN_NOT_OK_PREPEND(master_proxy_->ChangeEncryptionInfo(req, &resp, &rpc),
+                        "MasterServiceImpl::ChangeEncryptionInfo call fails.");
+  if (resp.has_error()) {
+    return StatusFromPB(resp.error().status());
+  }
+
+  std::cout << "Encryption disabled\n";
+  return Status::OK();
+}
+
 Status ClusterAdminClient::CreateCDCStream(const TableId& table_id) {
   master::CreateCDCStreamRequestPB req;
   master::CreateCDCStreamResponsePB resp;
@@ -614,6 +706,29 @@ Status ClusterAdminClient::DeleteUniverseReplication(const std::string& producer
   cout << "Replication deleted successfully" << endl;
   return Status::OK();
 }
+
+CHECKED_STATUS ClusterAdminClient::SetUniverseReplicationEnabled(const std::string& producer_id,
+                                                                 bool is_enabled) {
+  master::SetUniverseReplicationEnabledRequestPB req;
+  master::SetUniverseReplicationEnabledResponsePB resp;
+  req.set_producer_id(producer_id);
+  req.set_is_enabled(is_enabled);
+  const string toggle = (is_enabled ? "enabl" : "disabl");
+
+  RpcController rpc;
+  rpc.set_timeout(timeout_);
+  master_proxy_->SetUniverseReplicationEnabled(req, &resp, &rpc);
+
+  if (resp.has_error()) {
+    cout << "Error " << toggle << "ing "
+         << "universe replication: " << resp.error().status().message() << endl;
+    return StatusFromPB(resp.error().status());
+  }
+
+  cout << "Replication " << toggle << "ed successfully" << endl;
+  return Status::OK();
+}
+
 
 }  // namespace enterprise
 }  // namespace tools

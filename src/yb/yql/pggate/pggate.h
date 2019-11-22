@@ -31,6 +31,8 @@
 #include "yb/client/async_initializer.h"
 #include "yb/server/server_base_options.h"
 
+#include "yb/rpc/rpc_fwd.h"
+
 #include "yb/yql/pggate/pg_env.h"
 #include "yb/yql/pggate/pg_session.h"
 #include "yb/yql/pggate/pg_statement.h"
@@ -151,6 +153,14 @@ class PgApiImpl {
                                  PgOid database_oid,
                                  PgStatement **handle);
   CHECKED_STATUS ExecDropDatabase(PgStatement *handle);
+
+  // Alter database.
+  CHECKED_STATUS NewAlterDatabase(PgSession *pg_session,
+                                 const char *database_name,
+                                 PgOid database_oid,
+                                 PgStatement **handle);
+  CHECKED_STATUS AlterDatabaseRenameDatabase(PgStatement *handle, const char *newname);
+  CHECKED_STATUS ExecAlterDatabase(PgStatement *handle);
 
   // Reserve oids.
   CHECKED_STATUS ReserveOids(PgSession *pg_session,
@@ -301,7 +311,8 @@ class PgApiImpl {
 
 
   // This function returns the tuple id (ybctid) of a Postgres tuple.
-  CHECKED_STATUS DmlGetYBTupleId(PgStatement *handle, uint64_t *ybctid);
+  CHECKED_STATUS DmlBuildYBTupleId(PgStatement *handle, const PgAttrValueDescriptor *attrs,
+                                   int32_t nattrs, uint64_t *ybctid);
 
   // DB Operations: SET, WHERE, ORDER_BY, GROUP_BY, etc.
   // + The following operations are run by DocDB.
@@ -391,6 +402,11 @@ class PgApiImpl {
                              PgExpr **op_handle);
   CHECKED_STATUS OperatorAppendArg(PgExpr *op_handle, PgExpr *arg);
 
+  struct MessengerHolder {
+    std::unique_ptr<rpc::SecureContext> security_context;
+    std::unique_ptr<rpc::Messenger> messenger;
+  };
+
  private:
   // Control variables.
   PggateOptions pggate_options_;
@@ -402,6 +418,8 @@ class PgApiImpl {
   // Memory tracker.
   std::shared_ptr<MemTracker> mem_tracker_;
 
+  MessengerHolder messenger_holder_;
+
   // YBClient is to communicate with either master or tserver.
   yb::client::AsyncClientInitialiser async_client_init_;
 
@@ -410,10 +428,14 @@ class PgApiImpl {
   PgEnv::SharedPtr pg_env_;
 
   scoped_refptr<server::HybridClock> clock_;
+
+  // Local tablet-server shared memory segment handle.
+  std::unique_ptr<tserver::TServerSharedObject> tserver_shared_object_;
+
   scoped_refptr<PgTxnManager> pg_txn_manager_;
 
   // Mapping table of YugaByte and PostgreSQL datatypes.
-  std::unordered_map<int, const YBCPgTypeEntity *>type_map_;
+  std::unordered_map<int, const YBCPgTypeEntity *> type_map_;
 };
 
 }  // namespace pggate

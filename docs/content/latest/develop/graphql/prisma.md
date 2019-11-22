@@ -11,27 +11,27 @@ isTocNested: true
 showAsideToc: true
 ---
 
-Explore how you can use Prisma, and its GraphQL support, to interact with Yugabyte DB. You will quickly build a GraphQL server and then use the Prisma client to write data to and run queries on a Yugabyte DB database. Also, you'll get a taste of Prisma's ORM functionality.
+Explore how you can use Prisma, and its GraphQL support, to interact with YugabyteDB. You will quickly build a GraphQL server and then use the Prisma client to write data to and run queries on a YugabyteDB database. Also, you'll get a taste of Prisma's ORM functionality.
 
 [Prisma](https://prisma.io) is an [open source](https://github.com/prisma/prisma) suite of database tools that simplify database workflows by easing database access, migrations, and data management. Prisma replaces traditional ORMs and can be used to build GraphQL servers, REST APIs, microservices, and more. For an overview, see [Prisma Basics: Datamodel, Prisma Client & Server](https://www.prisma.io/docs/understand-prisma/prisma-basics-datamodel-client-and-server-fgz4/).
 
 ## Before you begin
 
-### Yugabyte DB
+### YugabyteDB
 
-If Yugabyte DB is installed, run the following `yb-ctl create` command to start a Yugabyte DB 1-node cluster, setting the default transaction isolation level to `serializable`:
+If YugabyteDB is installed, run the following `yb-ctl create` command to start a YugabyteDB 1-node cluster, setting the default transaction isolation level to `serializable`:
 
-```bash
-./bin/yb-ctl create --tserver_flags='ysql_pg_conf="default_transaction_isolation=serializable"'
+```sh
+./bin/yb-ctl create --tserver_flags=ysql_pg_conf="default_transaction_isolation=serializable"
 ```
 
 {{< note title="Note" >}}
 
-Setting the transaction isolation level to `serializable` is a temporary limitation due to a Yugabyte DB issue involving the locking of foreign keys ([GitHub issue #1199](https://github.com/yugabyte/yugabyte-db/issues/1199))
+Setting the transaction isolation level to `serializable` is a temporary limitation due to a YugabyteDB issue involving the locking of foreign keys ([GitHub issue #1199](https://github.com/yugabyte/yugabyte-db/issues/1199))
 
 {{< /note >}}
 
-If you are new to Yugabyte DB, you can be up and running with Yugabyte DB in under five minutes by following the steps in [Quick start](https://docs.yugabyte.com/latest/quick-start/). After installing Yugabyte DB, make sure to follow the step mentioned above.
+If you are new to YugabyteDB, you can be up and running with YugabyteDB in under five minutes by following the steps in [Quick start](https://docs.yugabyte.com/latest/quick-start/). After installing YugabyteDB, make sure to follow the step mentioned above.
 
 ### Prisma
 
@@ -42,7 +42,7 @@ To use Prisma, `npm` and Docker need to be installed. For details on installing 
 
 To install the Prisma CLI using `npm`, run the following command:
 
-```
+```sh
 npm i -g prisma
 ```
 
@@ -52,11 +52,11 @@ For more information, see [Set up Prisma (for a new database)](https://www.prism
 
 To set up a Prisma project, named `prisma-yb`, run the following command.
 
-```bash
+```sh
 prisma init prisma-yb
 ```
 
-In order to quickly explore using Prisma with Yugabyte DB, we will use the default database and user in the PostgreSQL-compatible Yugabyte DB.
+In order to quickly explore using Prisma with YugabyteDB, we will use the default database and user in the PostgreSQL-compatible YugabyteDB.
 
 When prompted, enter or select the following values:
 
@@ -79,9 +79,9 @@ When finished, the following three files have created in the project directory, 
 
 ## 2. Start the Prisma server
 
-To start the Prisma server (in the Docker container) and launch the connected Yugabyte DB database, go to the `prisma-yb` directory and then run the `docker-compose` command:
+To start the Prisma server (in the Docker container) and launch the connected YugabyteDB database, go to the `prisma-yb` directory and then run the `docker-compose` command:
 
-```bash
+```sh
 cd prisma-yb
 docker-compose up -d
 ```
@@ -115,7 +115,7 @@ type User {
 
 To deploy the Prisma service, run the following command:
 
-```bash
+```sh
 prisma deploy
 ```
 
@@ -129,7 +129,7 @@ For details on writing data with the Prisma client, see [Writing Data (JavaScrip
 
 1. Create a user Jane with three postings
 
-```json
+```graphql
 mutation {
   createUser(data: {
     name: "Jane Doe"
@@ -160,7 +160,7 @@ mutation {
 
 2. Create a user John with two postings.
 
-```json
+```graphql
 mutation {
   createUser(data: {
     name: "John Doe"
@@ -187,13 +187,13 @@ mutation {
 
 ## 6. Query the data
 
-Now that you have created some sample data, you can run some queries to get a taste of using Prisma to query Yugabyte DB. In the following examples, you will use the Prisma client to retrieve data. Paste the following code examples into the left side of a tab, and then click the arrow to process your requests. 
+Now that you have created some sample data, you can run some queries to get a taste of using Prisma to query YugabyteDB. In the following examples, you will use the Prisma client to retrieve data. Paste the following code examples into the left side of a tab, and then click the arrow to process your requests. 
 
 For details on using the Prisma client to read data, see [Reading Data (JavaScript)](https://www.prisma.io/docs/prisma-client/basic-data-access/reading-data-JAVASCRIPT-rsc2/).
 
 ### Get all users
 
-```json
+```graphqlå
 {
   users {
     id
@@ -208,7 +208,7 @@ For details on using the Prisma client to read data, see [Reading Data (JavaScri
 
 ### Get all posts
 
-```json
+```graphql
 {
   posts {
     id
@@ -223,7 +223,7 @@ For details on using the Prisma client to read data, see [Reading Data (JavaScri
 
 ### Get all users – ordered alphabetically
 
-```json
+```graphql
 {
   users(orderBy: name_ASC) {
     name
@@ -239,7 +239,7 @@ For details on using the Prisma client to read data, see [Reading Data (JavaScri
 
 ### Get all posts – ordered by popularity.
 
-```json
+```graphql
 {
   posts(orderBy: views_DESC) {
     text
@@ -260,7 +260,7 @@ In this subsection, you can take a quick look at the Prisma ORM functionality.
 
 Initialize an NPM project.
 
-```bash
+```sh
 npm init -y
 npm install --save prisma-client-lib
 ```
@@ -269,7 +269,7 @@ npm install --save prisma-client-lib
 
 1. Create a file
 
-```bash
+```sh
 touch index.js
 ```
 
@@ -306,7 +306,7 @@ The code above will create a new user `Alice` and a new post for that user. Fina
 
 3. Run the file:
 
-```bash
+```sh
 node index.js
 ```
 
@@ -316,15 +316,15 @@ node index.js
 
 Now that you're done with this exploration, you can clean up the pieces for your next adventure.
 
-1. Stop the Yugabyte cluster
+1. Stop the YugabyteDB cluster
 
-```bash
+```sh
 ./bin/yb-ctl stop
 ```
 
-To completely remove all Yugabyte data/cluster-state you can instead run:
+To completely remove all YugabyteDB data/cluster-state you can instead run:
 
-```bash
+```sh
 ./bin/yb-ctl destroy
 2. Stop The Prisma container
 docker stop <container-id>
@@ -332,7 +332,7 @@ docker stop <container-id>
 
 To completely remove all Prisma data/tate you can additionally run:
 
-```bash
+```sh
 docker rm <container-id>
 ```
 

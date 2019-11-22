@@ -337,8 +337,8 @@ public abstract class UniverseDefinitionTaskBase extends UniverseTaskBase {
     UniverseDefinitionTaskParams universeDetails = universe.getUniverseDetails();
 
     List<Cluster> onPremClusters = universeDetails.clusters.stream()
-        .filter(c -> c.userIntent.providerType.equals(CloudType.onprem))
-        .collect(Collectors.toList());
+            .filter(c -> c.userIntent.providerType.equals(CloudType.onprem))
+            .collect(Collectors.toList());
     for (Cluster onPremCluster : onPremClusters) {
       Map<UUID, List<String>> onpremAzToNodes = new HashMap<UUID, List<String>>();
       for (NodeDetails node : universeDetails.getNodesInCluster(onPremCluster.uuid)) {
@@ -508,22 +508,6 @@ public abstract class UniverseDefinitionTaskBase extends UniverseTaskBase {
   }
 
   /**
-   * Runs task for enabling encryption-at-rest key file on master
-   */
-  public SubTaskGroup createEnableEncryptionAtRestTask(String file) {
-    SubTaskGroup subTaskGroup = new SubTaskGroup("EnableEncryptionAtRest", executor);
-    EnableEncryptionAtRest task = new EnableEncryptionAtRest();
-    EnableEncryptionAtRest.Params params = new EnableEncryptionAtRest.Params();
-    params.universeUUID = taskParams().universeUUID;
-    // Add encryption file path
-    params.encryptionKeyFilePath = file;
-    task.initialize(params);
-    subTaskGroup.addTask(task);
-    subTaskGroupQueue.add(subTaskGroup);
-    return subTaskGroup;
-  }
-
-  /**
    * Creates a task list to wait for a minimum number of tservers to heartbeat
    * to the master leader.
    */
@@ -566,6 +550,7 @@ public abstract class UniverseDefinitionTaskBase extends UniverseTaskBase {
       // Set the assign public ip param.
       params.assignPublicIP = cloudInfo.assignPublicIP;
       params.useTimeSync = cloudInfo.useTimeSync;
+      params.cmkArn = taskParams().cmkArn;
       // Create the Ansible task to setup the server.
       AnsibleSetupServer ansibleSetupServer = new AnsibleSetupServer();
       ansibleSetupServer.initialize(params);
@@ -623,8 +608,6 @@ public abstract class UniverseDefinitionTaskBase extends UniverseTaskBase {
       
       UUID custUUID = Customer.get(Universe.get(taskParams().universeUUID).customerId).uuid;
 
-      params.encryptionKeyFilePath = taskParams().encryptionKeyFilePath;
-
       params.callhomeLevel = CustomerConfig.getCallhomeLevel(custUUID);
       // Set if updating master addresses only.
       params.updateMasterAddrsOnly = updateMasterAddrsOnly;
@@ -673,7 +656,6 @@ public abstract class UniverseDefinitionTaskBase extends UniverseTaskBase {
     subTaskGroupQueue.add(subTaskGroup);
     return subTaskGroup;
   }
-
 
   /**
    * Verify that the task params are valid.

@@ -13,10 +13,13 @@
 
 #include "yb/client/client.h"
 #include "yb/client/ql-dml-test-base.h"
+#include "yb/client/rejection_score_source.h"
 #include "yb/client/session.h"
 #include "yb/client/table.h"
 #include "yb/client/table_handle.h"
 #include "yb/client/transaction.h"
+
+#include "yb/common/ql_value.h"
 
 #include "yb/consensus/log_reader.h"
 #include "yb/consensus/raft_consensus.h"
@@ -36,6 +39,7 @@
 
 #include "yb/tserver/mini_tablet_server.h"
 #include "yb/tserver/tablet_server.h"
+#include "yb/tserver/ts_tablet_manager.h"
 
 #include "yb/util/bfql/gen_opcodes.h"
 #include "yb/util/random_util.h"
@@ -45,22 +49,29 @@
 #include "yb/yql/cql/ql/util/statement_result.h"
 
 DECLARE_double(respond_write_failed_probability);
+DECLARE_bool(allow_preempting_compactions);
 DECLARE_bool(detect_duplicates_for_retryable_requests);
+DECLARE_bool(enable_ondisk_compression);
 DECLARE_int32(raft_heartbeat_interval_ms);
 DECLARE_bool(combine_batcher_errors);
 DECLARE_int64(transaction_rpc_timeout_ms);
 DECLARE_double(transaction_max_missed_heartbeat_periods);
 DECLARE_int32(retryable_request_range_time_limit_secs);
+DECLARE_int64(rocksdb_compact_flush_rate_limit_bytes_per_sec);
 DECLARE_int32(rocksdb_level0_file_num_compaction_trigger);
 DECLARE_int32(rocksdb_level0_slowdown_writes_trigger);
+DECLARE_int32(rocksdb_max_background_compactions);
 DECLARE_int32(rocksdb_universal_compaction_min_merge_width);
 DECLARE_int32(rocksdb_universal_compaction_size_ratio);
-DECLARE_int64(db_write_buffer_size);
 DECLARE_uint64(log_segment_size_bytes);
+DECLARE_uint64(sst_files_soft_limit);
+DECLARE_uint64(sst_files_hard_limit);
 DECLARE_int32(log_min_seconds_to_retain);
 DECLARE_int64(remote_bootstrap_rate_limit_bytes_per_sec);
 DECLARE_int64(db_write_buffer_size);
 DECLARE_int32(log_cache_size_limit_mb);
+
+METRIC_DECLARE_counter(majority_sst_files_rejections);
 
 using namespace std::literals;
 
@@ -182,7 +193,8 @@ class QLStressTest : public QLDmlTestBase {
 
   void AddWriter(
       std::string value_prefix, std::atomic<int>* key, TestThreadHolder* thread_holder,
-      const std::chrono::nanoseconds& sleep_duration = std::chrono::nanoseconds());
+      const std::chrono::nanoseconds& sleep_duration = std::chrono::nanoseconds(),
+      bool allow_failures = false);
 
   TableHandle table_;
 
@@ -202,7 +214,8 @@ TEST_F(QLStressTest, LargeNumberOfTables) {
     InitSchemaBuilder(&b);
     CompleteSchemaBuilder(&b);
     TableHandle table;
-    client::YBTableName table_name("my_keyspace", "ql_client_test_table_" + std::to_string(i));
+    client::YBTableName table_name(
+        YQL_DATABASE_CQL, "my_keyspace", "ql_client_test_table_" + std::to_string(i));
     ASSERT_OK(table.Create(table_name, num_tablets_per_table, client_.get(), &b));
 
     int num_rows = num_tablets_per_table * 5;
@@ -704,26 +717,41 @@ TEST_F_EX(QLStressTest, SlowUpdateConsensus, QLStressTestSingleTablet) {
 }
 
 class QLStressTestDelayWrite : public QLStressTestSingleTablet {
- private:
+ public:
   void SetUp() override {
     FLAGS_db_write_buffer_size = 1_KB;
-    FLAGS_rocksdb_level0_slowdown_writes_trigger = 4;
-    FLAGS_rocksdb_level0_file_num_compaction_trigger = 2;
+    FLAGS_sst_files_soft_limit = 4;
+    FLAGS_sst_files_hard_limit = 10;
+    FLAGS_rocksdb_level0_file_num_compaction_trigger = 6;
     FLAGS_rocksdb_universal_compaction_min_merge_width = 2;
     FLAGS_rocksdb_universal_compaction_size_ratio = 1000;
     QLStressTestSingleTablet::SetUp();
+  }
+
+  client::YBSessionPtr NewSession() override {
+    auto result = QLStressTestSingleTablet::NewSession();
+    result->SetTimeout(5s);
+    return result;
   }
 };
 
 void QLStressTest::AddWriter(
     std::string value_prefix, std::atomic<int>* key, TestThreadHolder* thread_holder,
-    const std::chrono::nanoseconds& sleep_duration) {
+    const std::chrono::nanoseconds& sleep_duration,
+    bool allow_failures) {
   thread_holder->AddThreadFunctor([this, &stop = thread_holder->stop_flag(), key, sleep_duration,
-                                   value_prefix = std::move(value_prefix)] {
+                                   value_prefix = std::move(value_prefix), allow_failures] {
     auto session = NewSession();
     while (!stop.load(std::memory_order_acquire)) {
       auto new_key = *key + 1;
-      ASSERT_OK(WriteRow(session, new_key, value_prefix + std::to_string(new_key)));
+      session->SetRejectionScoreSource(std::make_shared<RejectionScoreSource>());
+      auto write_status = WriteRow(session, new_key, value_prefix + std::to_string(new_key));
+      if (!allow_failures) {
+        ASSERT_OK(write_status);
+      } else if (!write_status.ok()) {
+        LOG(WARNING) << "Write failed: " << write_status;
+        continue;
+      }
       if (sleep_duration.count() > 0) {
         std::this_thread::sleep_for(sleep_duration);
       }
@@ -733,18 +761,25 @@ void QLStressTest::AddWriter(
 }
 
 TEST_F_EX(QLStressTest, DelayWrite, QLStressTestDelayWrite) {
-  std::atomic<int> key(0);
+  constexpr int kWriters = 10;
+  constexpr int kKeyBase = 10000;
+
+  std::array<std::atomic<int>, kWriters> keys;
 
   const std::string value_prefix = std::string(1_KB, 'X');
 
   TestThreadHolder thread_holder;
-  AddWriter(value_prefix, &key, &thread_holder);
+  for (int i = 0; i != kWriters; ++i) {
+    keys[i] = i * kKeyBase;
+    AddWriter(value_prefix, &keys[i], &thread_holder, 0s, true /* allow_failures */);
+  }
 
-  thread_holder.AddThreadFunctor([this, &stop = thread_holder.stop_flag(), &key, &value_prefix] {
+  thread_holder.AddThreadFunctor([this, &stop = thread_holder.stop_flag(), &keys, &value_prefix] {
     auto session = NewSession();
     while (!stop.load(std::memory_order_acquire)) {
-      auto had_key = key.load(std::memory_order_acquire);
-      if (had_key == 0) {
+      int idx = RandomUniformInt(0, kWriters - 1);
+      auto had_key = keys[idx].load(std::memory_order_acquire);
+      if (had_key == kKeyBase * idx) {
         std::this_thread::sleep_for(50ms);
         continue;
       }
@@ -753,11 +788,37 @@ TEST_F_EX(QLStressTest, DelayWrite, QLStressTestDelayWrite) {
     }
   });
 
-  thread_holder.AddThread(RestartsThread(cluster_.get(), 5s, &thread_holder.stop_flag()));
-  thread_holder.WaitAndStop(60s);
+  for (;;) {
+    std::this_thread::sleep_for(1s);
+    int keys_written = 0;
+    for (int i = 0; i != kWriters; ++i) {
+      keys_written += keys[i].load() - kKeyBase * i;
+    }
+    LOG(INFO) << "Total keys written: " << keys_written;
+    if (keys_written < RegularBuildVsSanitizers(1000, 100)) {
+      continue;
+    }
 
-  LOG(INFO) << "Total keys written: " << key.load(std::memory_order_acquire);
-  ASSERT_GT(key.load(std::memory_order_acquire), RegularBuildVsSanitizers(2000, 100));
+    uint64_t total_rejections = 0;
+    for (int i = 0; i < cluster_->num_tablet_servers(); ++i) {
+      int64_t rejections = 0;
+      auto peers = cluster_->mini_tablet_server(i)->server()->tablet_manager()->GetTabletPeers();
+      for (const auto& peer : peers) {
+        auto counter = METRIC_majority_sst_files_rejections.Instantiate(
+            peer->tablet()->GetMetricEntity());
+        rejections += counter->value();
+      }
+      total_rejections += rejections;
+
+      LOG(INFO) << "Rejections: " << rejections;
+    }
+
+    if (!IsSanitizer() && total_rejections < 10) {
+      continue;
+    }
+
+    break;
+  }
 
   ASSERT_OK(WaitFor([cluster = cluster_.get()] {
     auto peers = ListTabletPeers(cluster, ListPeersFilter::kAll);
@@ -842,6 +903,73 @@ TEST_F_EX(QLStressTest, LongRemoteBootstrap, QLStressTestLongRemoteBootstrap) {
   // Write some more values and check that replica still in touch.
   std::this_thread::sleep_for(5s);
   ASSERT_OK(WaitAllReplicasHaveIndex(cluster_.get(), key.load(std::memory_order_acquire), 1s));
+}
+
+class QLStressDynamicCompactionPriorityTest : public QLStressTest {
+ public:
+  void SetUp() override {
+    FLAGS_allow_preempting_compactions = true;
+    FLAGS_db_write_buffer_size = 16_KB;
+    FLAGS_enable_ondisk_compression = false;
+    FLAGS_rocksdb_max_background_compactions = 1;
+    FLAGS_rocksdb_compact_flush_rate_limit_bytes_per_sec = 160_KB;
+    QLStressTest::SetUp();
+  }
+
+  int NumTablets() override {
+    return 1;
+  }
+
+  void InitSchemaBuilder(YBSchemaBuilder* builder) override {
+    builder->AddColumn("h")->Type(INT32)->HashPrimaryKey()->NotNull();
+    builder->AddColumn(kValueColumn)->Type(STRING);
+  }
+};
+
+TEST_F_EX(QLStressTest, DynamicCompactionPriority, QLStressDynamicCompactionPriorityTest) {
+  YBSchemaBuilder b;
+  InitSchemaBuilder(&b);
+  CompleteSchemaBuilder(&b);
+
+  TableHandle table2;
+  ASSERT_OK(table2.Create(YBTableName(kTableName.namespace_type(),
+                                      kTableName.namespace_name(),
+                                      kTableName.table_name() + "_2"),
+                          NumTablets(), client_.get(), &b));
+
+  TestThreadHolder thread_holder;
+  thread_holder.AddThreadFunctor([this, &table2, &stop = thread_holder.stop_flag()] {
+    auto session = NewSession();
+    int key = 1;
+    std::string value(FLAGS_db_write_buffer_size, 'X');
+    int left_writes_to_current_table = 0;
+    TableHandle* table = nullptr;
+    while (!stop.load(std::memory_order_acquire)) {
+      if (left_writes_to_current_table == 0) {
+        table = RandomUniformBool() ? &table_ : &table2;
+        left_writes_to_current_table = RandomUniformInt(1, std::max(1, key / 5));
+      } else {
+        --left_writes_to_current_table;
+      }
+      const auto op = table->NewWriteOp(QLWriteRequestPB::QL_STMT_INSERT);
+      auto* const req = op->mutable_request();
+      QLAddInt32HashValue(req, key);
+      table_.AddStringColumnValue(req, kValueColumn, value);
+      ASSERT_OK(session->Apply(op));
+      ASSERT_OK(session->Flush());
+      ASSERT_OK(CheckOp(op.get()));
+      std::this_thread::sleep_for(100ms);
+      ++key;
+    }
+  });
+
+  thread_holder.WaitAndStop(60s);
+
+  auto delete_start = CoarseMonoClock::now();
+  ASSERT_OK(client_->DeleteTable(table_->id(), true));
+  MonoDelta delete_time(CoarseMonoClock::now() - delete_start);
+  LOG(INFO) << "Delete time: " << delete_time;
+  ASSERT_LE(delete_time, 10s);
 }
 
 } // namespace client

@@ -28,6 +28,7 @@
 #include "yb/common/read_hybrid_time.h"
 #include "yb/common/transaction.h"
 
+#include "yb/docdb/docdb_types.h"
 #include "yb/docdb/doc_key.h"
 #include "yb/docdb/doc_kv_util.h"
 #include "yb/docdb/doc_path.h"
@@ -114,8 +115,9 @@ Result<PrepareDocWriteOperationResult> PrepareDocWriteOperation(
     const std::vector<std::unique_ptr<DocOperation>>& doc_write_ops,
     const google::protobuf::RepeatedPtrField<KeyValuePairPB>& read_pairs,
     const scoped_refptr<Histogram>& write_lock_latency,
-    IsolationLevel isolation_level,
-    OperationKind operation_kind,
+    const IsolationLevel isolation_level,
+    const OperationKind operation_kind,
+    const RowMarkType row_mark_type,
     bool transactional_table,
     CoarseTimePoint deadline,
     PartialRangeKeyIntents partial_range_key_intents,
@@ -251,21 +253,6 @@ class SubDocKeyBound : public SubDocKey {
   const bool is_exclusive_;
   const bool is_lower_bound_;
 };
-
-YB_DEFINE_ENUM(BoundType,
-    (kInvalid)
-    (kExclusiveLower)
-    (kInclusiveLower)
-    (kExclusiveUpper)
-    (kInclusiveUpper));
-
-inline BoundType LowerBound(bool exclusive) {
-  return exclusive ? BoundType::kExclusiveLower : BoundType::kInclusiveLower;
-}
-
-inline BoundType UpperBound(bool exclusive) {
-  return exclusive ? BoundType::kExclusiveUpper : BoundType::kInclusiveUpper;
-}
 
 class SliceKeyBound {
  public:
@@ -463,8 +450,7 @@ yb::Status GetTtl(const Slice& encoded_subdoc_key,
                   bool* doc_found,
                   Expiration* exp);
 
-YB_STRONGLY_TYPED_BOOL(IncludeBinary);
-YB_DEFINE_ENUM(StorageDbType, (kRegular)(kIntents));
+using DocDbDumpLineFilter = boost::function<bool(const std::string&)>;
 
 // Create a debug dump of the document database. Tries to decode all keys/values despite failures.
 // Reports all errors to the output stream and returns the status of the first failed operation,
@@ -473,13 +459,17 @@ void DocDBDebugDump(
     rocksdb::DB* rocksdb,
     std::ostream& out,
     StorageDbType db_type,
-    IncludeBinary include_binary = IncludeBinary::kFalse);
+    IncludeBinary include_binary = IncludeBinary::kFalse,
+    const DocDbDumpLineFilter& filter = DocDbDumpLineFilter());
 
 std::string DocDBDebugDumpToStr(
     rocksdb::DB* rocksdb, StorageDbType db_type = StorageDbType::kRegular,
-    IncludeBinary include_binary = IncludeBinary::kFalse);
+    IncludeBinary include_binary = IncludeBinary::kFalse,
+    const DocDbDumpLineFilter& filter = DocDbDumpLineFilter());
 
-std::string DocDBDebugDumpToStr(DocDB docdb, IncludeBinary include_binary = IncludeBinary::kFalse);
+std::string DocDBDebugDumpToStr(
+    DocDB docdb, IncludeBinary include_binary = IncludeBinary::kFalse,
+    const DocDbDumpLineFilter& line_filter = DocDbDumpLineFilter());
 
 template <class T>
 void DocDBDebugDumpToContainer(

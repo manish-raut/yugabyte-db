@@ -18,11 +18,16 @@
 #include "yb/client/table_alterer.h"
 #include "yb/client/table_handle.h"
 
+#include "yb/common/ql_value.h"
+
+#include "yb/master/master_util.h"
+
 #include "yb/tablet/tablet.h"
 #include "yb/tablet/tablet_peer.h"
 
 #include "yb/tserver/mini_tablet_server.h"
 #include "yb/tserver/tablet_server.h"
+#include "yb/tserver/ts_tablet_manager.h"
 
 #include "yb/util/backoff_waiter.h"
 #include "yb/util/curl_util.h"
@@ -1183,7 +1188,9 @@ TEST_F(QLDmlTest, OpenRecentlyCreatedTable) {
   const auto kMaxWait = 5s;
 
   for (int i = 0; i != kNumIterations; ++i) {
-    client::YBTableName table_name(kTableName.namespace_name(), Format("table_$0", i));
+    client::YBTableName table_name(master::GetDefaultDatabaseType(kTableName.namespace_name()),
+                                   kTableName.namespace_name(),
+                                   Format("table_$0", i));
     std::thread table_creation_thread([this, table_name] {
       YBSchemaBuilder builder;
       builder.AddColumn("k")->Type(INT32)->HashPrimaryKey()->NotNull();

@@ -27,6 +27,15 @@
 #ifdef YBC_CXX_DECLARATION_MODE
 namespace yb {
 namespace pggate {
+
+// These should match XACT_READ_UNCOMMITED, XACT_READ_COMMITED, XACT_REPEATABLE_READ,
+// XACT_SERIALIZABLE from xact.h.
+enum class PgIsolationLevel {
+  READ_UNCOMMITED = 0,
+  READ_COMMITED = 1,
+  REPEATABLE_READ = 2,
+  SERIALIZABLE = 3,
+};
 #endif  // YBC_CXX_DECLARATION_MODE
 
 #define YBC_CURRENT_CLASS PgTxnManager
@@ -35,20 +44,23 @@ YBC_CLASS_START_REF_COUNTED_THREAD_SAFE
 
 YBC_VIRTUAL_DESTRUCTOR
 
-YBC_STATUS_METHOD(BeginTransaction, ((int, isolation)))
+YBC_STATUS_METHOD_NO_ARGS(BeginTransaction)
+YBC_STATUS_METHOD_NO_ARGS(RestartTransaction)
 YBC_STATUS_METHOD_NO_ARGS(CommitTransaction)
 YBC_STATUS_METHOD_NO_ARGS(AbortTransaction)
 YBC_STATUS_METHOD(SetIsolationLevel, ((int, isolation)));
+YBC_STATUS_METHOD(SetReadOnly, ((bool, read_only)));
+YBC_STATUS_METHOD(SetDeferrable, ((bool, deferrable)));
 
 #ifdef YBC_CXX_DECLARATION_MODE
   PgTxnManager(client::AsyncClientInitialiser* async_client_init,
-               scoped_refptr<ClockBase> clock);
+               scoped_refptr<ClockBase> clock,
+               const tserver::TServerSharedObject* tserver_shared_object);
 
   // Returns the transactional session, starting a new transaction if necessary.
   yb::Result<client::YBSession*> GetTransactionalSession();
 
-  Status BeginWriteTransactionIfNecessary(bool read_only_op);
-  Status RestartTransaction();
+  CHECKED_STATUS BeginWriteTransactionIfNecessary(bool read_only_op);
 
   bool CanRestart() { return can_restart_.load(std::memory_order_acquire); }
   void PreventRestart();
@@ -61,6 +73,7 @@ YBC_STATUS_METHOD(SetIsolationLevel, ((int, isolation)));
 
   client::AsyncClientInitialiser* async_client_init_ = nullptr;
   scoped_refptr<ClockBase> clock_;
+  const tserver::TServerSharedObject* const tserver_shared_object_;
 
   bool txn_in_progress_ = false;
   client::YBTransactionPtr txn_;
@@ -69,9 +82,15 @@ YBC_STATUS_METHOD(SetIsolationLevel, ((int, isolation)));
   std::atomic<client::TransactionManager*> transaction_manager_{nullptr};
   std::mutex transaction_manager_mutex_;
   std::unique_ptr<client::TransactionManager> transaction_manager_holder_;
-  int isolation_level_ = 1;
+
+  // Postgres transaction characteristics.
+  PgIsolationLevel isolation_level_ = PgIsolationLevel::REPEATABLE_READ;
+  bool read_only_ = false;
+  bool deferrable_ = false;
 
   std::atomic<bool> can_restart_{true};
+
+  std::unique_ptr<tserver::TabletServerServiceProxy> tablet_server_proxy_;
 
   DISALLOW_COPY_AND_ASSIGN(PgTxnManager);
 #endif  // YBC_CXX_DECLARATION_MODE

@@ -18,6 +18,8 @@
 #include <glog/logging.h>
 
 #include "yb/common/jsonb.h"
+#include "yb/common/ql_value.h"
+
 #include "yb/docdb/doc_kv_util.h"
 #include "yb/docdb/subdocument.h"
 #include "yb/docdb/intent.h"
@@ -36,7 +38,7 @@ using yb::QLValuePB;
 using yb::common::Jsonb;
 using yb::util::Decimal;
 using yb::util::VarInt;
-using yb::util::FormatBytesAsStr;
+using yb::FormatBytesAsStr;
 using yb::util::CompareUsingLessThan;
 using yb::util::FastAppendSignedVarIntToStr;
 using yb::util::FastDecodeSignedVarInt;
@@ -53,6 +55,7 @@ using yb::util::DecodeDoubleFromKey;
 #define IGNORE_NON_PRIMITIVE_VALUE_TYPES_IN_SWITCH \
     case ValueType::kArray: FALLTHROUGH_INTENDED; \
     case ValueType::kMergeFlags: FALLTHROUGH_INTENDED; \
+    case ValueType::kRowLock: FALLTHROUGH_INTENDED; \
     case ValueType::kGroupEnd: FALLTHROUGH_INTENDED; \
     case ValueType::kGroupEndDescending: FALLTHROUGH_INTENDED; \
     case ValueType::kInvalid: FALLTHROUGH_INTENDED; \
@@ -217,6 +220,7 @@ string PrimitiveValue::ToString() const {
     case ValueType::kObsoleteIntentType:
       return Format("Intent($0)", uint16_val_);
     case ValueType::kMergeFlags: FALLTHROUGH_INTENDED;
+    case ValueType::kRowLock: FALLTHROUGH_INTENDED;
     case ValueType::kGroupEnd: FALLTHROUGH_INTENDED;
     case ValueType::kGroupEndDescending: FALLTHROUGH_INTENDED;
     case ValueType::kTtl: FALLTHROUGH_INTENDED;
@@ -542,6 +546,7 @@ string PrimitiveValue::ToValue() const {
     case ValueType::kObsoleteIntentTypeSet: FALLTHROUGH_INTENDED;
     case ValueType::kObsoleteIntentType: FALLTHROUGH_INTENDED;
     case ValueType::kMergeFlags: FALLTHROUGH_INTENDED;
+    case ValueType::kRowLock: FALLTHROUGH_INTENDED;
     case ValueType::kGroupEnd: FALLTHROUGH_INTENDED;
     case ValueType::kGroupEndDescending: FALLTHROUGH_INTENDED;
     case ValueType::kObsoleteIntentPrefix: FALLTHROUGH_INTENDED;
@@ -1125,6 +1130,7 @@ Status PrimitiveValue::DecodeFromValue(const rocksdb::Slice& rocksdb_slice) {
     case ValueType::kUInt16Hash: FALLTHROUGH_INTENDED;
     case ValueType::kInvalid: FALLTHROUGH_INTENDED;
     case ValueType::kMergeFlags: FALLTHROUGH_INTENDED;
+    case ValueType::kRowLock: FALLTHROUGH_INTENDED;
     case ValueType::kTtl: FALLTHROUGH_INTENDED;
     case ValueType::kUserTimestamp: FALLTHROUGH_INTENDED;
     case ValueType::kColumnId: FALLTHROUGH_INTENDED;
@@ -1526,19 +1532,19 @@ PrimitiveValue PrimitiveValue::FromQLValuePB(const QLValuePB& value,
                             : (value.bool_value() ? ValueType::kTrue
                                                   : ValueType::kFalse));
     case QLValuePB::kTimestampValue:
-      return PrimitiveValue(QLValue(value).timestamp_value(), sort_order);
+      return PrimitiveValue(QLValue::timestamp_value(value), sort_order);
     case QLValuePB::kDateValue:
       return PrimitiveValue::UInt32(value.date_value(), sort_order);
     case QLValuePB::kTimeValue:
       return PrimitiveValue(value.time_value(), sort_order);
     case QLValuePB::kInetaddressValue:
-      return PrimitiveValue(QLValue(value).inetaddress_value(), sort_order);
+      return PrimitiveValue(QLValue::inetaddress_value(value), sort_order);
     case QLValuePB::kJsonbValue:
-      return PrimitiveValue::Jsonb(QLValue(value).jsonb_value());
+      return PrimitiveValue::Jsonb(QLValue::jsonb_value(value));
     case QLValuePB::kUuidValue:
-      return PrimitiveValue(QLValue(value).uuid_value(), sort_order);
+      return PrimitiveValue(QLValue::uuid_value(value), sort_order);
     case QLValuePB::kTimeuuidValue:
-      return PrimitiveValue(QLValue(value).timeuuid_value(), sort_order);
+      return PrimitiveValue(QLValue::timeuuid_value(value), sort_order);
     case QLValuePB::kFrozenValue: {
       QLSeqValuePB frozen = value.frozen_value();
       PrimitiveValue pv(ValueType::kFrozen);

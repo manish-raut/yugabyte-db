@@ -17,7 +17,7 @@ Do the following configuration steps on each of the nodes in the cluster.
 
 ## ntp
 
- If your instance does not have public Internet access, make sure the following packages have been installed (all can be retrieved from the yum repo **epel**, make sure to use the latest epel release repo):
+ If your instance does not have public Internet access, make sure the following packages have been installed (all can be retrieved from the yum repo **epel**, make sure to use the latest epel release repository):
 
 - epel-release
 - ntp
@@ -34,13 +34,13 @@ In Linux, `ulimit` is used to limit and control the usage of system resources (t
 
 ### Checking ulimits
 
-Run the following command to check the ulimit settings.
+Run the following command to check the `ulimit` settings.
 
 ```sh
 $ ulimit -a
 ```
 
-The following settings are recommended when running Yugabyte DB.
+The following settings are recommended when running YugabyteDB.
 
 ```
 core file size          (blocks, -c) unlimited
@@ -63,7 +63,7 @@ file locks                      (-x) unlimited
 
 ### Setting system-wide ulimits
 
-You can change values by substituting the -n option for any possible value in the output of ulimit -a. Issue a command in the following form to change a `ulimit` setting.
+You can change values by substituting the `-n` option for any possible value in the output of `ulimit -a`. Issue a command in the following form to change a `ulimit` setting.
 
 ```sh
 $ ulimit -n <value>
@@ -81,12 +81,12 @@ $ ulimit -n <value>
 
 {{< note title="Note" >}}
 
-- After changing a ulimit setting, the YB-Master and YB-TServer processes must be restarted in order for the new settings to take effect. Check the `/proc/<process pid>` file to see the current settings.
+- After changing a ulimit setting, the YB-Master and YB-TServer services must be restarted in order for the new settings to take effect. Check the `/proc/<process pid>` file to see the current settings.
 - Changes made using ulimit may revert following a system restart depending on the system configuration.
 
 {{< /note >}}
 
-Most of these settings can also be applied permanently by adding the following in /etc/security/limits.conf
+Most of these settings can also be applied permanently by adding the following in `/etc/security/limits.conf`.
 
 ```
 *                -       core            unlimited
@@ -110,7 +110,16 @@ On CentOS, /etc/security/limits.d/20-nproc.conf must also be configured
 ```
 
 {{< note title="Note" >}}
-- After changing a ulimit setting in /etc/security/limits.conf, you will need to log out and back in. To update system processes, you may need to restart.
+
+After changing a `ulimit` setting in `/etc/security/limits.conf`, you will need to log out and back in. To update system processes, you may need to restart.
+
 {{< /note >}}
 
+{{< note title="Note" >}}
+If you're using a desktop-distribution, such as ubuntu-desktop, the settings above may not suffice.
+The OS needs additional steps to change `ulimit` for gui login. In the case of ubuntu-desktop:
 
+In `/etc/systemd/user.conf` and `/etc/systemd/system.conf`, add at the end of file `DefaultLimitNOFILE=64000`.
+
+Something similar may be needed for other distributions.
+{{< /note >}}

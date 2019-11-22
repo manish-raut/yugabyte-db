@@ -3,7 +3,7 @@ title: Quick start
 linkTitle: Quick start
 description: Quick start
 image: /images/section_icons/index/quick_start.png
-headcontent: The easiest way to test Yugabyte DB's basic features and APIs is to create a local cluster on a single host.
+headcontent: The easiest way to test YugabyteDB's basic features and APIs is to create a local cluster on a single host.
 type: page
 aliases:
   - /quick-start/
@@ -15,7 +15,9 @@ menu:
 ---
 
 {{< note title="Note" >}}
-The local cluster setup on a single host is intended for development and learning. For production deployment or performance benchmarking, deploying a true multi-node on multi-host setup, see [Deploy Yugabyte DB](../../latest/deploy).
+
+The local cluster setup on a single host is intended for development and learning. For production deployment, performance benchmarking, or deploying a true multi-node on multi-host setup, see [Deploy YugabyteDB](../../latest/deploy).
+
 {{< /note >}}
 
 ## Get started yourself
@@ -25,7 +27,7 @@ The local cluster setup on a single host is intended for development and learnin
     <a class="section-link icon-offset" href="install/">
       <div class="head">
         <img class="icon" src="/images/section_icons/quick_start/install.png" aria-hidden="true" />
-        <div class="title">1. Install Yugabyte DB</div>
+        <div class="title">1. Install YugabyteDB</div>
       </div>
       <div class="body">
         Install the binary on macOS or Linux or use a Docker image to run on the operating system of your choice.
@@ -61,10 +63,10 @@ The local cluster setup on a single host is intended for development and learnin
     <a class="section-link icon-offset" href="build-apps/">
       <div class="head">
         <img class="icon" src="/images/section_icons/develop/api-icon.png" aria-hidden="true" />
-        <div class="title">4. Build an app</div>
+        <div class="title">4. Build an application</div>
       </div>
       <div class="body">
-        Build an app in the programming language of your choice.
+        Build an application in the programming language of your choice.
       </div>
     </a>
   </div>

@@ -20,6 +20,10 @@ export const INSECURE_LOGIN_RESPONSE = 'INSECURE_LOGIN_RESPONSE';
 
 export const RESET_CUSTOMER = 'RESET_CUSTOMER';
 
+export const API_TOKEN_LOADING = 'API_TOKEN_LOADING';
+export const API_TOKEN = 'API_TOKEN';
+export const API_TOKEN_RESPONSE = 'API_TOKEN_RESPONSE';
+
 // log out Customer
 export const LOGOUT = 'LOGOUT';
 export const LOGOUT_SUCCESS = 'LOGOUT_SUCCESS';
@@ -82,6 +86,11 @@ export const IMPORT_RELEASE_RESPONSE = 'IMPORT_RELEASE_RESPONSE';
 
 export const UPDATE_RELEASE = 'UPDATE_RELEASE';
 export const UPDATE_RELEASE_RESPONSE = 'UPDATE_RELEASE_RESPONSE';
+
+export const GET_SCHEDULES = 'GET_SCHEDULES';
+export const GET_SCHEDULES_RESPONSE = 'GET_SCHEDULES_RESPONSE';
+export const DELETE_SCHEDULE = 'DELETE_SCHEDULE';
+export const DELETE_SCHEDULE_RESPONSE = 'DELETE_SCHEDULE_RESPONSE';
 
 export function validateToken() {
   let cUUID = Cookies.get("customerId");
@@ -173,6 +182,28 @@ export function logoutFailure(error) {
   return {
     type: LOGOUT_FAILURE,
     payload: error
+  };
+}
+
+export function getApiTokenLoading() {
+  return {
+    type: API_TOKEN_LOADING
+  };
+}
+
+export function getApiToken(authToken) {
+  const cUUID = localStorage.getItem("customerId");
+  const request = axios.put(`${ROOT_URL}/customers/${cUUID}/api_token`, {}, authToken);
+  return {
+    type: API_TOKEN,
+    payload: request
+  };
+}
+
+export function getApiTokenResponse(response) {
+  return {
+    type: API_TOKEN_RESPONSE,
+    payload: response
   };
 }
 
@@ -394,6 +425,39 @@ export function fetchCustomerConfigsResponse(response) {
     payload: response
   };
 }
+
+export function getSchedules() {
+  const cUUID = localStorage.getItem("customerId");
+  const request = axios.get(`${ROOT_URL}/customers/${cUUID}/schedules`);
+  return {
+    type: GET_SCHEDULES,
+    payload: request
+  };
+}
+
+export function getSchedulesResponse(response) {
+  return {
+    type: GET_SCHEDULES_RESPONSE,
+    payload: response
+  };
+}
+
+export function deleteSchedule(scheduleUUID) {
+  const cUUID = localStorage.getItem("customerId");
+  const request = axios.delete(`${ROOT_URL}/customers/${cUUID}/schedules/${scheduleUUID}`);
+  return {
+    type: DELETE_SCHEDULE,
+    payload: request
+  };
+}
+
+export function deleteScheduleResponse(response) {
+  return {
+    type: DELETE_SCHEDULE_RESPONSE,
+    payload: response
+  };
+}
+
 
 export function getLogs() {
   // TODO(bogdan): Maybe make this a URL param somehow?

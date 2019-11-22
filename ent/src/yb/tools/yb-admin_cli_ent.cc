@@ -48,15 +48,15 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
       " (default 60, set 0 to skip flushing)",
       [client](const CLIArguments& args) -> Status {
         if (args.size() < 4) {
-          UsageAndExit(args[0]);
+          return ClusterAdminCli::kInvalidArguments;
         }
 
         const int num_tables = (args.size() - 2)/2;
-        vector<YBTableName> tables(num_tables);
+        vector<YBTableName> tables;
+        tables.reserve(num_tables);
 
         for (int i = 0; i < num_tables; ++i) {
-          tables[i].set_namespace_name(args[2 + i*2]);
-          tables[i].set_table_name(args[3 + i*2]);
+          tables.push_back(VERIFY_RESULT(ResolveTableName(client, args[2 + i*2], args[3 + i*2])));
         }
 
         int timeout_secs = 60;
@@ -74,7 +74,7 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
       "restore_snapshot", " <snapshot_id>",
       [client](const CLIArguments& args) -> Status {
         if (args.size() != 3) {
-          UsageAndExit(args[0]);
+          return ClusterAdminCli::kInvalidArguments;
         }
 
         const string snapshot_id = args[2];
@@ -87,7 +87,7 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
       "export_snapshot", " <snapshot_id> <file_name>",
       [client](const CLIArguments& args) -> Status {
         if (args.size() != 4) {
-          UsageAndExit(args[0]);
+          return ClusterAdminCli::kInvalidArguments;
         }
 
         const string snapshot_id = args[2];
@@ -103,16 +103,18 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
       "import_snapshot", " <file_name> [<keyspace> <table_name> [<keyspace> <table_name>]...]",
       [client](const CLIArguments& args) -> Status {
         if (args.size() < 3 || args.size() % 2 != 1) {
-          UsageAndExit(args[0]);
+          return ClusterAdminCli::kInvalidArguments;
         }
 
         const string file_name = args[2];
         const int num_tables = (args.size() - 3)/2;
-        vector<YBTableName> tables(num_tables);
+        vector<YBTableName> tables;
+        tables.reserve(num_tables);
 
         for (int i = 0; i < num_tables; ++i) {
-          tables[i].set_namespace_name(args[3 + i*2]);
-          tables[i].set_table_name(args[4 + i*2]);
+          const auto typed_namespace = VERIFY_RESULT(ParseNamespaceName(args[3 + i*2]));
+          tables.push_back(
+              YBTableName(typed_namespace.db_type, typed_namespace.name, args[4 + i*2]));
         }
 
         string msg = num_tables > 0 ?
@@ -128,7 +130,7 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
       "delete_snapshot", " <snapshot_id>",
       [client](const CLIArguments& args) -> Status {
         if (args.size() != 3) {
-          UsageAndExit(args[0]);
+          return ClusterAdminCli::kInvalidArguments;
         }
 
         const string snapshot_id = args[2];
@@ -141,9 +143,9 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
       "list_replica_type_counts", " <keyspace> <table_name>",
       [client](const CLIArguments& args) -> Status {
         if (args.size() != 4) {
-          UsageAndExit(args[0]);
+          return ClusterAdminCli::kInvalidArguments;
         }
-        const YBTableName table_name(args[2], args[3]);
+        const auto table_name = VERIFY_RESULT(ResolveTableName(client, args[2], args[3]));
         RETURN_NOT_OK_PREPEND(client->ListReplicaTypeCounts(table_name),
                               "Unable to list live and read-only replica counts");
         return Status::OK();
@@ -153,7 +155,7 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
       "set_preferred_zones", " <cloud.region.zone> [<cloud.region.zone>]...",
       [client](const CLIArguments& args) -> Status {
         if (args.size() < 3) {
-          UsageAndExit(args[0]);
+          return ClusterAdminCli::kInvalidArguments;
         }
         RETURN_NOT_OK_PREPEND(client->SetPreferredZones(
           std::vector<string>(args.begin() + 2, args.end())), "Unable to set preferred zones");
@@ -164,7 +166,7 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
       "rotate_universe_key", " key_path",
       [client](const CLIArguments& args) -> Status {
         if (args.size() < 2) {
-          UsageAndExit(args[0]);
+          return ClusterAdminCli::kInvalidArguments;
         }
         RETURN_NOT_OK_PREPEND(
             client->RotateUniverseKey(args[2]), "Unable to rotate universe key.");
@@ -186,10 +188,60 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
       });
 
   Register(
+      "add_universe_key_to_all_masters", " key_id key_path",
+      [client](const CLIArguments& args) -> Status {
+        if (args.size() != 4) {
+          return ClusterAdminCli::kInvalidArguments;
+        }
+        string key_id = args[2];
+        faststring contents;
+        RETURN_NOT_OK(ReadFileToString(Env::Default(), args[3], &contents));
+        string universe_key = contents.ToString();
+
+        RETURN_NOT_OK_PREPEND(client->AddUniverseKeyToAllMasters(key_id, universe_key),
+                              "Unable to add universe key to all masters.");
+        return Status::OK();
+      });
+
+  Register(
+      "all_masters_have_universe_key_in_memory", " key_id",
+      [client](const CLIArguments& args) -> Status {
+        if (args.size() != 3) {
+          return ClusterAdminCli::kInvalidArguments;
+        }
+        RETURN_NOT_OK_PREPEND(client->AllMastersHaveUniverseKeyInMemory(args[2]),
+                              "Unable to check whether master has universe key in memory.");
+        return Status::OK();
+      });
+
+  Register(
+      "rotate_universe_key_in_memory", " key_id",
+      [client](const CLIArguments& args) -> Status {
+        if (args.size() != 3) {
+          return ClusterAdminCli::kInvalidArguments;
+        }
+        string key_id = args[2];
+
+        RETURN_NOT_OK_PREPEND(client->RotateUniverseKeyInMemory(key_id),
+                              "Unable rotate universe key in memory.");
+        return Status::OK();
+      });
+
+  Register(
+      "disable_encryption_in_memory", "",
+      [client](const CLIArguments& args) -> Status {
+        if (args.size() != 2) {
+          return ClusterAdminCli::kInvalidArguments;
+        }
+        RETURN_NOT_OK_PREPEND(client->DisableEncryptionInMemory(), "Unable to disable encryption.");
+        return Status::OK();
+      });
+
+  Register(
       "create_cdc_stream", " <table_id>",
       [client](const CLIArguments& args) -> Status {
         if (args.size() < 3) {
-          UsageAndExit(args[0]);
+          return ClusterAdminCli::kInvalidArguments;
         }
         const string table_id = args[2];
         RETURN_NOT_OK_PREPEND(client->CreateCDCStream(table_id),
@@ -202,7 +254,7 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
       " <producer_universe_uuid> <producer_master_addresses> <comma_separated_list_of_table_ids>",
       [client](const CLIArguments& args) -> Status {
         if (args.size() < 5) {
-          UsageAndExit(args[0]);
+          return ClusterAdminCli::kInvalidArguments;
         }
         const string producer_uuid = args[2];
 
@@ -224,12 +276,27 @@ void ClusterAdminCli::RegisterCommandHandlers(ClusterAdminClientClass* client) {
       "delete_universe_replication", " <producer_universe_uuid>",
       [client](const CLIArguments& args) -> Status {
         if (args.size() < 3) {
-          UsageAndExit(args[0]);
+          return ClusterAdminCli::kInvalidArguments;
         }
         const string producer_id = args[2];
         RETURN_NOT_OK_PREPEND(client->DeleteUniverseReplication(producer_id),
                               Substitute("Unable to delete replication for universe $0",
                               producer_id));
+        return Status::OK();
+      });
+
+  Register(
+      "set_universe_replication_enabled", " <producer_universe_uuid> <0|1>",
+      [client](const CLIArguments& args) -> Status {
+        if (args.size() < 4) {
+          return ClusterAdminCli::kInvalidArguments;
+        }
+        const string producer_id = args[2];
+        const bool is_enabled = atoi(args[3].c_str()) != 0;
+        RETURN_NOT_OK_PREPEND(client->SetUniverseReplicationEnabled(producer_id, is_enabled),
+            Substitute("Unable to $0 replication for universe $1",
+                is_enabled ? "enable" : "disable",
+                producer_id));
         return Status::OK();
       });
 }

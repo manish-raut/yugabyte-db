@@ -16,6 +16,7 @@
 
 #include "yb/common/pgsql_error.h"
 #include "yb/common/pgsql_protocol.pb.h"
+#include "yb/common/transaction_error.h"
 #include "yb/common/ybc-internal.h"
 
 #include "yb/util/logging.h"
@@ -24,6 +25,7 @@
 #include "yb/util/status.h"
 #include "yb/util/debug-util.h"
 #include "yb/util/bytes_formatter.h"
+#include "yb/util/scope_exit.h"
 #include "yb/gutil/stringprintf.h"
 
 using std::string;
@@ -32,7 +34,28 @@ namespace yb {
 
 namespace {
 
+void ChangeWorkingDir(const char* dir) {
+  int chdir_result = chdir(dir);
+  if (chdir_result != 0) {
+    LOG(WARNING) << "Failed to change working directory to " << dir << ", error was "
+                 << errno << " " << std::strerror(errno) << "!";
+  }
+}
+
 Status InitInternal(const char* argv0) {
+  // Change current working directory from postgres data dir (as set by postmaster)
+  // to the one from yb-tserver so that relative paths in gflags would be resolved in the same way.
+  char pg_working_dir[PATH_MAX];
+  CHECK(getcwd(pg_working_dir, sizeof(pg_working_dir)) != nullptr);
+  const char* yb_working_dir = getenv("YB_WORKING_DIR");
+  if (yb_working_dir) {
+    ChangeWorkingDir(yb_working_dir);
+  }
+  auto se = ScopeExit([&pg_working_dir] {
+    // Restore PG data dir as current directory.
+    ChangeWorkingDir(pg_working_dir);
+  });
+
   // Allow putting gflags into a file and specifying that file's path as an env variable.
   const char* pg_flagfile_path = getenv("YB_PG_FLAGFILE");
   if (pg_flagfile_path) {
@@ -119,9 +142,38 @@ bool YBCStatusIsDuplicateKey(YBCStatus s) {
 }
 
 uint32_t YBCStatusPgsqlError(YBCStatus s) {
-  const uint8_t* pgerr = StatusWrapper(s)->ErrorData(PgsqlErrorTag::kCategory);
-  return static_cast<uint32>(pgerr == nullptr ? YBPgErrorCode::YB_PG_INTERNAL_ERROR
-                                              : PgsqlErrorTag::Decode(pgerr));
+  StatusWrapper wrapper(s);
+  const uint8_t* pg_err_ptr = wrapper->ErrorData(PgsqlErrorTag::kCategory);
+  // If we have PgsqlError explicitly set, we decode it
+  YBPgErrorCode result = pg_err_ptr != nullptr ? PgsqlErrorTag::Decode(pg_err_ptr)
+                                               : YBPgErrorCode::YB_PG_INTERNAL_ERROR;
+
+  // If the error is the default generic YB_PG_INTERNAL_ERROR (as we also set in AsyncRpc::Failed)
+  // then we try to deduce it from a transaction error.
+  if (result == YBPgErrorCode::YB_PG_INTERNAL_ERROR) {
+    const uint8_t* txn_err_ptr = wrapper->ErrorData(TransactionErrorTag::kCategory);
+    if (txn_err_ptr != nullptr) {
+      switch (TransactionErrorTag::Decode(txn_err_ptr)) {
+        case TransactionErrorCode::kAborted: FALLTHROUGH_INTENDED;
+        case TransactionErrorCode::kReadRestartRequired: FALLTHROUGH_INTENDED;
+        case TransactionErrorCode::kConflict:
+          result = YBPgErrorCode::YB_PG_T_R_SERIALIZATION_FAILURE;
+          break;
+        case TransactionErrorCode::kSnapshotTooOld:
+          result = YBPgErrorCode::YB_PG_SNAPSHOT_TOO_OLD;
+          break;
+        case TransactionErrorCode::kNone: FALLTHROUGH_INTENDED;
+        default:
+          result = YBPgErrorCode::YB_PG_INTERNAL_ERROR;
+      }
+    }
+  }
+  return static_cast<uint32_t>(result);
+}
+
+uint16_t YBCStatusTransactionError(YBCStatus s) {
+  const TransactionError txn_err(*StatusWrapper(s));
+  return static_cast<uint16_t>(txn_err.value());
 }
 
 void YBCFreeStatus(YBCStatus s) {
@@ -138,6 +190,10 @@ const char* YBCStatusMessageBegin(YBCStatus s) {
 
 const char* YBCStatusCodeAsCString(YBCStatus s) {
   return StatusWrapper(s)->CodeAsCString();
+}
+
+bool YBCIsRestartReadError(uint16_t txn_errcode) {
+  return txn_errcode == static_cast<uint16_t>(TransactionErrorCode::kReadRestartRequired);
 }
 
 YBCStatus YBCInit(const char* argv0,
@@ -168,7 +224,7 @@ void YBCLogImpl(
 }
 
 const char* YBCFormatBytesAsStr(const char* data, size_t size) {
-  return YBCPAllocStdString(util::FormatBytesAsStr(data, size));
+  return YBCPAllocStdString(FormatBytesAsStr(data, size));
 }
 
 const char* YBCGetStackTrace() {

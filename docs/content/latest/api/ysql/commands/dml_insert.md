@@ -98,20 +98,20 @@ DO NOTHING | DO UPDATE SET *update_item* [ , ... ] [ WHERE *condition* ]
 
 First, the bare insert. Create a sample table.
 
-```sql
-postgres=# CREATE TABLE sample(k1 int, k2 int, v1 int, v2 text, PRIMARY KEY (k1, k2));
+```postgresql
+yugabyte=# CREATE TABLE sample(k1 int, k2 int, v1 int, v2 text, PRIMARY KEY (k1, k2));
 ```
 
 Insert some rows.
 
-```sql
-postgres=# INSERT INTO sample VALUES (1, 2.0, 3, 'a'), (2, 3.0, 4, 'b'), (3, 4.0, 5, 'c');
+```postgresql
+yugabyte=# INSERT INTO sample VALUES (1, 2.0, 3, 'a'), (2, 3.0, 4, 'b'), (3, 4.0, 5, 'c');
 ```
 
 Check the inserted rows.
 
-```sql
-postgres=# SELECT * FROM sample ORDER BY k1;
+```postgresql
+yugabyte=# SELECT * FROM sample ORDER BY k1;
 ```
 
 ```
@@ -124,19 +124,19 @@ postgres=# SELECT * FROM sample ORDER BY k1;
 
 Next, a basic "upsert" example. Re-create and re-populate the sample table.
 
-```sql
-postgres=# DROP TABLE IF EXISTS sample CASCADE;
+```postgresql
+yugabyte=# DROP TABLE IF EXISTS sample CASCADE;
 ```
 
-```sql
-postgres=# CREATE TABLE sample(
+```postgresql
+yugabyte=# CREATE TABLE sample(
   id int  CONSTRAINT sample_id_pk PRIMARY KEY,
   c1 text CONSTRAINT sample_c1_NN NOT NULL,
   c2 text CONSTRAINT sample_c2_NN NOT NULL);
 ```
 
-```sql
-postgres=# INSERT INTO sample(id, c1, c2)
+```postgresql
+yugabyte=# INSERT INTO sample(id, c1, c2)
   VALUES (1, 'cat'    , 'sparrow'),
          (2, 'dog'    , 'blackbird'),
          (3, 'monkey' , 'thrush');
@@ -144,8 +144,8 @@ postgres=# INSERT INTO sample(id, c1, c2)
 
 Check the inserted rows.
 
-```sql
-postgres=# SELECT id, c1, c2 FROM sample ORDER BY id;
+```postgresql
+yugabyte=# SELECT id, c1, c2 FROM sample ORDER BY id;
 ```
 
 ```
@@ -158,8 +158,8 @@ postgres=# SELECT id, c1, c2 FROM sample ORDER BY id;
 
 Demonstrate "on conflict do nothing". In this case, we don't need to specify the conflict target.
 
-```sql
-postgres=# INSERT INTO sample(id, c1, c2)
+```postgresql
+yugabyte=# INSERT INTO sample(id, c1, c2)
   VALUES (3, 'horse' , 'pigeon'),
          (4, 'cow'   , 'robin')
   ON CONFLICT
@@ -169,8 +169,8 @@ postgres=# INSERT INTO sample(id, c1, c2)
 Check the result.
 The non-conflicting row with id = 4 is inserted, but the conflicting row with id = 3 is NOT updated.
 
-```sql
-postgres=# SELECT id, c1, c2 FROM sample ORDER BY id;
+```postgresql
+yugabyte=# SELECT id, c1, c2 FROM sample ORDER BY id;
 ```
 
 ```
@@ -185,8 +185,8 @@ postgres=# SELECT id, c1, c2 FROM sample ORDER BY id;
 Demonstrate the real "upsert". In this case, we DO need to specify the conflict target. Notice the use of the
 EXCLUDED keyword to specify the conflicting rows in the to-be-upserted relation.
 
-```sql
-postgres=# INSERT INTO sample(id, c1, c2)
+```postgresql
+yugabyte=# INSERT INTO sample(id, c1, c2)
   VALUES (3, 'horse' , 'pigeon'),
          (5, 'tiger' , 'starling')
   ON CONFLICT (id)
@@ -197,8 +197,8 @@ postgres=# INSERT INTO sample(id, c1, c2)
 Check the result.
 The non-conflicting row with id = 5 is inserted, and the conflicting row with id = 3 is updated.
 
-```sql
-postgres=# SELECT id, c1, c2 FROM sample ORDER BY id;
+```postgresql
+yugabyte=# SELECT id, c1, c2 FROM sample ORDER BY id;
 ```
 
 ```
@@ -217,7 +217,7 @@ excluded rows. We illustrate this by attempting to insert two conflicting rows
 And we specify that the existing row with c1 = 'tiger' should not be updated
 with "WHERE sample.c1 <> 'tiger'".
 
-```sql
+```postgresql
 INSERT INTO sample(id, c1, c2)
   VALUES (4, 'deer'   , 'vulture'),
          (5, 'lion'   , 'hawk'),
@@ -232,8 +232,8 @@ Check the result.
 The non-conflicting row with id = 6 is inserted;  the conflicting row with id = 4 is updated;
 but the conflicting row with id = 5 (and c1 = 'tiger') is NOT updated;
 
-```sql
-postgres=# SELECT id, c1, c2 FROM sample ORDER BY id;
+```postgresql
+yugabyte=# SELECT id, c1, c2 FROM sample ORDER BY id;
 ```
 
 ```
@@ -256,18 +256,18 @@ WHERE EXCLUDED.c1 <> 'lion'
 Finally, a slightly more elaborate "upsert" example. Re-create and re-populate the sample table.
 Notice that id is a self-populating surrogate primary key and that c1 is a business unique key.
 
-```sql
-postgres=# DROP TABLE IF EXISTS sample CASCADE;
+```postgresql
+yugabyte=# DROP TABLE IF EXISTS sample CASCADE;
 ```
 
-```sql
+```postgresql
 CREATE TABLE sample(
   id INTEGER GENERATED ALWAYS AS IDENTITY CONSTRAINT sample_id_pk PRIMARY KEY,
   c1 TEXT CONSTRAINT sample_c1_NN NOT NULL CONSTRAINT sample_c1_unq unique,
   c2 TEXT CONSTRAINT sample_c2_NN NOT NULL);
 ```
 
-```sql
+```postgresql
 INSERT INTO sample(c1, c2)
   VALUES ('cat'   , 'sparrow'),
          ('deer'  , 'thrush'),
@@ -277,8 +277,8 @@ INSERT INTO sample(c1, c2)
 
 Check the inserted rows.
 
-```sql
-postgres=# SELECT id, c1, c2 FROM sample ORDER BY c1;
+```postgresql
+yugabyte=# SELECT id, c1, c2 FROM sample ORDER BY c1;
 ```
 
 ```
@@ -297,8 +297,8 @@ a VALUES clause. We also specify the conflict column(s)
 indirectly by mentioniing the name of the unique constrained
 that covers them.
 
-```sql
-postgres=# WITH to_be_upserted AS (
+```postgresql
+yugabyte=# WITH to_be_upserted AS (
   SELECT c1, c2 FROM (VALUES
     ('cat'   , 'chaffinch'),
     ('deer'  , 'robin'),
@@ -314,8 +314,8 @@ postgres=# WITH to_be_upserted AS (
 
 Check the inserted rows.
 
-```sql
-postgres=# SELECT id, c1, c2 FROM sample ORDER BY c1;
+```postgresql
+yugabyte=# SELECT id, c1, c2 FROM sample ORDER BY c1;
 ```
 
 ```

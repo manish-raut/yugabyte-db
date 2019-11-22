@@ -103,6 +103,7 @@ message PgsqlWriteRequestPB {
     PGSQL_INSERT = 1;
     PGSQL_UPDATE = 2;
     PGSQL_DELETE = 3;
+    PGSQL_UPSERT = 4;
   }
 
   // Client info
@@ -203,7 +204,7 @@ message PgsqlPagingStatePB {
   // number of rows in the SELECT's LIMIT clause across fetches.
   optional uint64 total_num_rows_read = 4;
 
-  // For selects with IN condition on the hash columns there are mutiple partitions that need to be
+  // For selects with IN condition on the hash columns there are multiple partitions that need to be
   // queried, one for each combination of allowed values for the hash columns.
   // This holds the index of the next partition and is used to resume the read from the right place.
   optional uint64 next_partition_index = 5;
@@ -288,6 +289,9 @@ message PgsqlReadRequestPB {
 
   // The version of the ysql system catalog this query was prepared against.
   optional uint64 ysql_catalog_version = 16;
+
+  // Row mark as used by postgres for row locking.
+  optional RowMarkType row_mark_type = 23;
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -325,7 +329,18 @@ message PgsqlResponsePB {
   // Number of rows affected by the operation. Currently only used for update and delete.
   optional int32 rows_affected_count = 7;
 
-  // External Status : PostgreSQL error code encoded as in errcodes.h or yb_pg_errcodes.h.
+  //
+  // External statuses.
+  //
+  // If you add more of those, make sure they are correctly picked up, e.g.
+  // by PgDocReadOp::ReceiveResponse and PgDocOp::CheckRestartUnlocked
+  //
+
+  // PostgreSQL error code encoded as in errcodes.h or yb_pg_errcodes.h.
   // See https://www.postgresql.org/docs/11/errcodes-appendix.html
   optional uint64 pg_error_code = 8;
+
+  // Transaction error code, obtained by static_cast of TransactionErrorTag::Decode
+  // of Status::ErrorData(TransactionErrorTag::kCategory)
+  optional uint32 txn_error_code = 9;
 }

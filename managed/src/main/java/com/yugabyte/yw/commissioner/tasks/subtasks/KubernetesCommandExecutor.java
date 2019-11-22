@@ -133,6 +133,7 @@ public class KubernetesCommandExecutor extends AbstractTaskBase {
     // so we would need that for any sort helm operations.
     public String nodePrefix;
     public String ybSoftwareVersion = null;
+    public String encryptionKeyFilePath = null;
     public boolean enableNodeToNodeEncrypt = false;
     public boolean enableClientToNodeEncrypt = false;
     public UUID rootCA = null;

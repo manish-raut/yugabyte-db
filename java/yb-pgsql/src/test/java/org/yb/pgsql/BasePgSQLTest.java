@@ -75,7 +75,12 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
   // Postgres settings.
   protected static final String DEFAULT_PG_DATABASE = "yugabyte";
   protected static final String DEFAULT_PG_USER = "yugabyte";
+  protected static final String DEFAULT_PG_PASS = "yugabyte";
   public static final String TEST_PG_USER = "yugabyte_test";
+
+  // Non-standard PSQL states defined in yb_pg_errcodes.h
+  protected static final String SERIALIZATION_FAILURE_PSQL_STATE = "40001";
+  protected static final String SNAPSHOT_TOO_OLD_PSQL_STATE = "72000";
 
   // Postgres flags.
   private static final String MASTERS_FLAG = "FLAGS_pggate_master_addresses";
@@ -90,6 +95,7 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
   protected static final String UPDATE_STMT_METRIC = METRIC_PREFIX + "UpdateStmt";
   protected static final String OTHER_STMT_METRIC = METRIC_PREFIX + "OtherStmts";
   protected static final String TRANSACTIONS_METRIC = METRIC_PREFIX + "Transactions";
+  protected static final String AGGREGATE_PUSHDOWNS_METRIC = METRIC_PREFIX + "AggregatePushdowns";
 
   // CQL and Redis settings.
   protected static boolean startCqlProxy = false;
@@ -164,7 +170,7 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
     }
   }
 
-  private Map<String, String> getMasterAndTServerFlags() {
+  protected Map<String, String> getMasterAndTServerFlags() {
     Map<String, String> flagMap = new TreeMap<>();
     flagMap.put(
         "retryable_rpc_single_call_timeout_ms",
@@ -203,7 +209,6 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
     Map<String, String> flagMap = new TreeMap<>();
     flagMap.put("client_read_write_timeout_ms", "120000");
     flagMap.put("memory_limit_hard_bytes", String.valueOf(2L * 1024 * 1024 * 1024));
-    flagMap.put("enable_ysql", "true");
     return flagMap;
   }
 
@@ -966,12 +971,9 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
     Thread.sleep(MiniYBCluster.TSERVER_HEARTBEAT_INTERVAL_MS * 2);
   }
 
-  // Time execution time of a statement.
-  protected void timeQueryWithRowCount(String stmt, int expectedRowCount, long maxRuntimeMillis)
+  // Run a query and check row-count.
+  private void runQueryWithRowCount(String stmt, int expectedRowCount)
       throws Exception {
-    LOG.info(String.format("Exec query: %s", stmt));
-    final long runtimeMillis = System.currentTimeMillis();
-
     // Query and check row count.
     int rowCount = 0;
     try (Statement statement = connection.createStatement()) {
@@ -982,11 +984,28 @@ public class BasePgSQLTest extends BaseMiniClusterTest {
       }
     }
     assertEquals(rowCount, expectedRowCount);
+  }
+
+  // Time execution time of a statement.
+  protected void timeQueryWithRowCount(String stmt, int expectedRowCount, long maxRuntimeMillis,
+                                       int numberOfRuns)
+      throws Exception {
+    LOG.info(String.format("Exec query: %s", stmt));
+
+    // Not timing the first query run as its result is not predictable.
+    runQueryWithRowCount(stmt, expectedRowCount);
+
+    // Seek average run-time for a few different run.
+    final long startTimeMillis = System.currentTimeMillis();
+    for (int qrun = 0; qrun < numberOfRuns; qrun++) {
+      runQueryWithRowCount(stmt, expectedRowCount);
+    }
 
     // Check the elapsed time.
-    long elapsedTimeMillis = System.currentTimeMillis() - runtimeMillis;
-    LOG.info(String.format("Complete query: %s. Elapsed time = %d msecs", stmt, elapsedTimeMillis));
-    assertTrue(elapsedTimeMillis < maxRuntimeMillis);
+    long elapsedTimeMillis = System.currentTimeMillis() - startTimeMillis;
+    LOG.info(String.format("Ran query %d times. Total elapsed time = %d msecs",
+                           numberOfRuns, elapsedTimeMillis));
+    assertTrue(elapsedTimeMillis < numberOfRuns * maxRuntimeMillis);
   }
 
   public static class ConnectionBuilder {

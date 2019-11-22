@@ -104,13 +104,16 @@ class ConsensusQueueTest : public YBTest {
   void CloseAndReopenQueue() {
     // Blow away the memtrackers before creating the new queue.
     queue_.reset();
+    auto token = raft_pool_->NewToken(ThreadPool::ExecutionMode::SERIAL);
     queue_.reset(new PeerMessageQueue(metric_entity_,
                                       log_.get(),
                                       nullptr /* server_tracker */,
+                                      nullptr /* parent_tracker */,
                                       FakeRaftPeerPB(kLeaderUuid),
                                       kTestTablet,
                                       clock_,
-    raft_pool_->NewToken(ThreadPool::ExecutionMode::SERIAL)));
+                                      nullptr /* consensus_context */,
+                                      std::move(token)));
   }
 
   void TearDown() override {
@@ -878,15 +881,15 @@ TEST_F(ConsensusQueueTest, TestReadReplicatedMessagesForCDC) {
   queue_->ResponseFromPeer(response.responder_uuid(), response, &more_pending);
   ASSERT_TRUE(more_pending);
 
-  ReplicateMsgs msgs;
-  ASSERT_OK(queue_->ReadReplicatedMessagesForCDC(MakeOpIdForIndex(0), &msgs));
-  ASSERT_EQ(last_committed_index, msgs.size());
-  msgs.clear();
+  auto read_result = ASSERT_RESULT(queue_->ReadReplicatedMessagesForCDC(
+      yb::OpId::FromPB(MakeOpIdForIndex(0))));
+  ASSERT_EQ(last_committed_index, read_result.messages.size());
 
   // Read from some index > 0
   int start = 10;
-  ASSERT_OK(queue_->ReadReplicatedMessagesForCDC(MakeOpIdForIndex(start), &msgs));
-  ASSERT_EQ(last_committed_index - start, msgs.size());
+  read_result = ASSERT_RESULT(queue_->ReadReplicatedMessagesForCDC(
+      yb::OpId::FromPB(MakeOpIdForIndex(start))));
+  ASSERT_EQ(last_committed_index - start, read_result.messages.size());
 }
 
 }  // namespace consensus

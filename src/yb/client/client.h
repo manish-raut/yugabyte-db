@@ -60,6 +60,7 @@
 #endif
 #include "yb/client/permissions.h"
 #include "yb/client/yb_table_name.h"
+#include "yb/client/namespace_alterer.h"
 
 #include "yb/common/partition.h"
 #include "yb/common/roles_permissions.h"
@@ -164,6 +165,9 @@ class YBClientBuilder {
 
   // Add an RPC address of a master. At least one master is required.
   YBClientBuilder& add_master_server_addr(const std::string& addr);
+
+  // Don't override master addresses with external information from FLAGS_flagfile.
+  YBClientBuilder& skip_master_flagfile(bool should_skip = true);
 
   // The default timeout used for administrative operations (e.g. CreateTable,
   // AlterTable, ...). Optional.
@@ -326,6 +330,9 @@ class YBClient {
                                  const boost::optional<YQLDatabase>& database_type = boost::none,
                                  const std::string& namespace_id = "");
 
+  YBNamespaceAlterer* NewNamespaceAlterer(const string& namespace_name,
+                                          const std::string& namespace_id);
+
   // For Postgres: reserve oids for a Postgres database.
   CHECKED_STATUS ReservePgsqlOids(const std::string& namespace_id,
                                   uint32_t next_oid, uint32_t count,
@@ -341,15 +348,14 @@ class YBClient {
                                        const char* resource_name,
                                        const char* namespace_name,
                                        const std::string& role_name);
-  // List all namespace names and optionally namespace ids.
-  // 'namespaces' is appended to only on success.
-  CHECKED_STATUS ListNamespaces(std::vector<std::string>* namespace_names,
-                                std::vector<std::string>* namespace_ids = nullptr) {
-    return ListNamespaces(boost::none, namespace_names, namespace_ids);
+
+  // List all namespace identifiers.
+  Result<vector<master::NamespaceIdentifierPB>> ListNamespaces() {
+    return ListNamespaces(boost::none);
   }
-  CHECKED_STATUS ListNamespaces(const boost::optional<YQLDatabase>& database_type,
-                                std::vector<std::string>* namespace_names,
-                                std::vector<std::string>* namespace_ids = nullptr);
+
+  Result<vector<master::NamespaceIdentifierPB>> ListNamespaces(
+      const boost::optional<YQLDatabase>& database_type);
 
   // Check if the namespace given by 'namespace_name' or 'namespace_id' exists.
   // Result value is set only on success.
@@ -417,6 +423,9 @@ class YBClient {
   void CreateCDCStream(const TableId& table_id,
                        const std::unordered_map<std::string, std::string>& options,
                        CreateCDCStreamCallback callback);
+
+  // Delete multiple CDC streams.
+  CHECKED_STATUS DeleteCDCStream(const vector<CDCStreamId>& streams);
 
   // Delete a CDC stream.
   CHECKED_STATUS DeleteCDCStream(const CDCStreamId& stream_id);
@@ -594,6 +603,7 @@ class YBClient {
   friend class YBNoOp;
   friend class YBTable;
   friend class YBTableAlterer;
+  friend class YBNamespaceAlterer;
   friend class YBTableCreator;
   friend class internal::Batcher;
   friend class internal::GetTableSchemaRpc;

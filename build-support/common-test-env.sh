@@ -811,7 +811,8 @@ determine_test_timeout() {
     timeout_sec=$YB_TEST_TIMEOUT
   else
     if [[ $rel_test_binary == "tests-pgwrapper/pg_wrapper-test" || \
-          $rel_test_binary == "tests-pgwrapper/pg_libpq-test" ]]; then
+          $rel_test_binary == "tests-pgwrapper/pg_libpq-test" || \
+          $rel_test_binary == "tests-pgwrapper/create_initial_sys_catalog_snapshot" ]]; then
       # This test is particularly slow on TSAN, and it has to be run all at once (we cannot use
       # --gtest_filter) because of dependencies between tests.
       timeout_sec=$INCREASED_TEST_TIMEOUT_SEC
@@ -1232,7 +1233,7 @@ find_test_binary() {
 }
 
 show_disk_usage() {
-  header "Disk usage (df -h)"
+  heading "Disk usage (df -h)"
 
   df -h
 

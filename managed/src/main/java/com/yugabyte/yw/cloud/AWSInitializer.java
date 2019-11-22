@@ -275,7 +275,7 @@ public class AWSInitializer extends AbstractInitializer {
       // The service code should be 'AmazonEC2'.
       include &= matches(productAttrs, "servicecode", FilterOp.Equals, "AmazonEC2");
       // Filter by the OS we support.
-      include &= (matches(productAttrs, "operatingSystem", FilterOp.Equals, "RHEL"));
+      include &= (matches(productAttrs, "operatingSystem", FilterOp.Equals, "Linux"));
       // Pick the supported license models.
       include &= (matches(productAttrs, "licenseModel", FilterOp.Equals, "No License required") ||
           matches(productAttrs, "licenseModel", FilterOp.Equals, "NA"));
@@ -342,7 +342,9 @@ public class AWSInitializer extends AbstractInitializer {
     priceDetails.effectiveDate = product.get("effectiveDate").textValue();
 
     // Save to db
-    PriceComponent.upsert(provider.code, region.code, instanceCode, priceDetails);
+    if (Double.parseDouble(pricePerUnit) != 0.0) {
+      PriceComponent.upsert(provider.code, region.code, instanceCode, priceDetails);
+    }
   }
 
   /**
@@ -392,7 +394,7 @@ public class AWSInitializer extends AbstractInitializer {
       // The service code should be 'AmazonEC2'.
       include &= matches(productAttrs, "servicecode", FilterOp.Equals, "AmazonEC2");
       // Filter by the OS we support.
-      include &= (matches(productAttrs, "operatingSystem", FilterOp.Equals, "RHEL"));
+      include &= (matches(productAttrs, "operatingSystem", FilterOp.Equals, "Linux"));
       // Pick the supported license models.
       include &= (matches(productAttrs, "licenseModel", FilterOp.Equals, "No License required") ||
                   matches(productAttrs, "licenseModel", FilterOp.Equals, "NA"));
@@ -529,9 +531,15 @@ public class AWSInitializer extends AbstractInitializer {
             break;
         }
       } else {
-        volumeCount = Integer.parseInt(parts[0]);
-        volumeSizeGB = Integer.parseInt(parts[2]);
-        volumeType = VolumeType.valueOf(parts[3].toUpperCase());
+        if (parts[1].equals("x")) {
+          volumeCount = Integer.parseInt(parts[0]);
+          volumeSizeGB = Integer.parseInt(parts[2]);
+          volumeType = VolumeType.valueOf(parts[3].toUpperCase());
+        } else {
+          volumeCount = 1;
+          volumeSizeGB = Integer.parseInt(parts[0]);
+          volumeType = VolumeType.valueOf(parts[2].toUpperCase());
+        }
       }
 
       if (enableVerboseLogging) {

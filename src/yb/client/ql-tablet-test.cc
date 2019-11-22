@@ -23,6 +23,8 @@
 #include "yb/client/session.h"
 #include "yb/client/table_handle.h"
 
+#include "yb/common/ql_value.h"
+
 #include "yb/consensus/consensus.h"
 #include "yb/consensus/consensus.pb.h"
 
@@ -39,12 +41,14 @@
 
 #include "yb/tserver/mini_tablet_server.h"
 #include "yb/tserver/tablet_server.h"
+#include "yb/tserver/ts_tablet_manager.h"
 #include "yb/tserver/tserver_service.proxy.h"
 
 #include "yb/util/random_util.h"
 #include "yb/util/size_literals.h"
 
 #include "yb/yql/cql/ql/util/statement_result.h"
+#include "yb/util/shared_lock.h"
 
 using namespace std::literals; // NOLINT
 
@@ -64,6 +68,10 @@ DECLARE_int32(memstore_size_mb);
 DECLARE_int64(global_memstore_size_mb_max);
 DECLARE_bool(TEST_allow_stop_writes);
 DECLARE_int32(yb_num_shards_per_tserver);
+DECLARE_int32(tablet_inject_latency_on_apply_write_txn_ms);
+DECLARE_bool(TEST_log_cache_skip_eviction);
+DECLARE_uint64(sst_files_hard_limit);
+DECLARE_uint64(sst_files_soft_limit);
 
 namespace yb {
 namespace client {
@@ -76,8 +84,8 @@ const std::string kKeyColumn = "key"s;
 const std::string kRangeKey1Column = "range_key1"s;
 const std::string kRangeKey2Column = "range_key2"s;
 const std::string kValueColumn = "int_val"s;
-const YBTableName kTable1Name("my_keyspace", "ql_client_test_table1");
-const YBTableName kTable2Name("my_keyspace", "ql_client_test_table2");
+const YBTableName kTable1Name(YQL_DATABASE_CQL, "my_keyspace", "ql_client_test_table1");
+const YBTableName kTable2Name(YQL_DATABASE_CQL, "my_keyspace", "ql_client_test_table2");
 
 int32_t ValueForKey(int32_t key) {
   return key * 2;
@@ -245,8 +253,7 @@ class QLTabletTest : public QLDmlTestBase {
           }
           std::shared_ptr<std::vector<ColumnSchema>>
             columns = std::make_shared<std::vector<ColumnSchema>>(table->schema().columns());
-          Slice data;
-          RETURN_NOT_OK(controller.GetSidecar(ql_batch.rows_data_sidecar(), &data));
+          Slice data = VERIFY_RESULT(controller.GetSidecar(ql_batch.rows_data_sidecar()));
           yb::ql::RowsResult result(table->name(), columns, data.ToBuffer());
           auto row_block = result.GetRowBlock();
           if (row_block->row_count() == 1) {
@@ -284,14 +291,14 @@ class QLTabletTest : public QLDmlTestBase {
       std::string start1, end1, start2, end2;
       {
         auto& metadata = source_infos[i]->metadata();
-        std::shared_lock<std::remove_reference<decltype(metadata)>::type> lock(metadata);
+        SharedLock<std::remove_reference<decltype(metadata)>::type> lock(metadata);
         const auto& partition = metadata.state().pb.partition();
         start1 = partition.partition_key_start();
         end1 = partition.partition_key_end();
       }
       {
         auto& metadata = dest_infos[i]->metadata();
-        std::shared_lock<std::remove_reference<decltype(metadata)>::type> lock(metadata);
+        SharedLock<std::remove_reference<decltype(metadata)>::type> lock(metadata);
         const auto& partition = metadata.state().pb.partition();
         start2 = partition.partition_key_start();
         end2 = partition.partition_key_end();
@@ -437,7 +444,7 @@ TEST_F(QLTabletTest, TransactionsTableTablets) {
   ASSERT_OK(table.Create(kTable1Name, 8, client_.get(), &builder));
 
   // Wait for transactions table to be created.
-  YBTableName table_name(master::kSystemNamespaceName, kTransactionsTableName);
+  YBTableName table_name(YQL_DATABASE_CQL, master::kSystemNamespaceName, kTransactionsTableName);
   master::IsCreateTableDoneResponsePB resp;
   ASSERT_OK(WaitForTableCreation(table_name, &resp));
   ASSERT_TRUE(resp.done());
@@ -876,7 +883,9 @@ TEST_F(QLTabletTest, ManySstFilesBootstrap) {
   {
     google::FlagSaver flag_saver;
 
-    auto original_rocksdb_level0_stop_writes_trigger = FLAGS_rocksdb_level0_stop_writes_trigger;
+    auto original_rocksdb_level0_stop_writes_trigger = 48;
+    FLAGS_sst_files_hard_limit = std::numeric_limits<uint64_t>::max() / 4;
+    FLAGS_sst_files_soft_limit = FLAGS_sst_files_hard_limit;
     FLAGS_rocksdb_level0_stop_writes_trigger = 10000;
     FLAGS_rocksdb_level0_slowdown_writes_trigger = 10000;
     FLAGS_rocksdb_disable_compactions = true;
@@ -923,7 +932,7 @@ class QLTabletTestSmallMemstore : public QLTabletTest {
 };
 
 TEST_F_EX(QLTabletTest, DoubleFlush, QLTabletTestSmallMemstore) {
-  FLAGS_TEST_allow_stop_writes = false;
+  SetAtomicFlag(false, &FLAGS_TEST_allow_stop_writes);
 
   TestWorkload workload(cluster_.get());
   workload.set_table_name(kTable1Name);
@@ -941,8 +950,74 @@ TEST_F_EX(QLTabletTest, DoubleFlush, QLTabletTestSmallMemstore) {
 
   workload.StopAndJoin();
 
+  // Flush on rocksdb shutdown could produce second immutable memtable, that will stop writes.
+  SetAtomicFlag(true, &FLAGS_TEST_allow_stop_writes);
   cluster_->Shutdown(); // Need to shutdown cluster before resetting clock back.
   cluster_.reset();
+}
+
+TEST_F(QLTabletTest, OperationMemTracking) {
+  FLAGS_TEST_log_cache_skip_eviction = true;
+
+  constexpr size_t kValueSize = 64_KB;
+  const auto kWaitInterval = 50ms;
+
+  YBSchemaBuilder builder;
+  builder.AddColumn(kKeyColumn)->Type(INT32)->HashPrimaryKey()->NotNull();
+  builder.AddColumn(kValueColumn)->Type(STRING);
+
+  TableHandle table;
+  ASSERT_OK(table.Create(kTable1Name, CalcNumTablets(3), client_.get(), &builder));
+
+  FLAGS_tablet_inject_latency_on_apply_write_txn_ms = 1000;
+
+  const auto op = table.NewWriteOp(QLWriteRequestPB::QL_STMT_INSERT);
+  auto* const req = op->mutable_request();
+  QLAddInt32HashValue(req, 42);
+  auto session = CreateSession();
+  table.AddStringColumnValue(req, kValueColumn, std::string(kValueSize, 'X'));
+  ASSERT_OK(session->Apply(op));
+  auto future = session->FlushFuture();
+  auto server_tracker = MemTracker::GetRootTracker()->FindChild("server 1");
+  auto tablets_tracker = server_tracker->FindChild("Tablets");
+  auto log_tracker = server_tracker->FindChild("log_cache");
+
+  std::chrono::steady_clock::time_point deadline;
+  bool tracked_by_tablets = false;
+  bool tracked_by_log_cache = false;
+  for (;;) {
+    // The consumption get order is important, otherwise we could get into situation where
+    // mem tracking changed between gets.
+    auto log_cache_consumption = log_tracker->consumption();
+    tracked_by_log_cache = tracked_by_log_cache || log_cache_consumption >= kValueSize;
+    int64_t operation_tracker_consumption = 0;
+    for (auto& child : tablets_tracker->ListChildren()) {
+      operation_tracker_consumption += child->FindChild("operation_tracker")->consumption();
+    }
+
+    tracked_by_tablets = tracked_by_tablets || operation_tracker_consumption >= kValueSize;
+    LOG(INFO) << "Operation tracker consumption: " << operation_tracker_consumption
+              << ", log cache consumption: " << log_cache_consumption;
+    // We have overhead in both log cache and tablets.
+    // So if value is double tracked then sum consumption will be higher than double value size.
+    ASSERT_LE(operation_tracker_consumption + log_cache_consumption, kValueSize * 2)
+        << DumpMemTrackers();
+    if (std::chrono::steady_clock::time_point() == deadline) { // operation did not finish yet
+      if (future.wait_for(kWaitInterval) == std::future_status::ready) {
+        LOG(INFO) << "Value written";
+        deadline = std::chrono::steady_clock::now() + 3s;
+        ASSERT_OK(future.get());
+        ASSERT_EQ(QLResponsePB::YQL_STATUS_OK, op->response().status());
+      }
+    } else if (deadline < std::chrono::steady_clock::now() || tracked_by_log_cache) {
+      break;
+    } else {
+      std::this_thread::sleep_for(kWaitInterval);
+    }
+  }
+
+  ASSERT_TRUE(tracked_by_tablets);
+  ASSERT_TRUE(tracked_by_log_cache);
 }
 
 } // namespace client

@@ -290,7 +290,7 @@ class StateAndPriorityTaskComparator {
   }
 };
 
-std::atomic<size_t> task_serial_no_(0);
+std::atomic<size_t> task_serial_no_(1);
 
 } // namespace
 
@@ -365,6 +365,7 @@ class PriorityThreadPool::Impl : public PriorityThreadPoolWorkerContext {
           ++it;
         }
       }
+      UpdateMaxPriorityToDefer();
     }
     AbortTasks(abort_tasks, kRemoveTaskStatus);
   }
@@ -394,6 +395,7 @@ class PriorityThreadPool::Impl : public PriorityThreadPoolWorkerContext {
       for (auto& worker : workers_) {
         workers.push_back(&worker);
       }
+      UpdateMaxPriorityToDefer();
     }
     for (auto* worker : workers) {
       worker->Stop();

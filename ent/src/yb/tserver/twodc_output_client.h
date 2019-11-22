@@ -11,7 +11,7 @@
 // under the License.
 
 #include "yb/cdc/cdc_output_client_interface.h"
-#include "yb/cdc/cdc_consumer_util.h"
+#include "yb/cdc/cdc_util.h"
 
 #ifndef ENT_SRC_YB_TSERVER_TWODC_OUTPUT_CLIENT_H
 #define ENT_SRC_YB_TSERVER_TWODC_OUTPUT_CLIENT_H
@@ -29,10 +29,14 @@ class YBClient;
 namespace tserver {
 namespace enterprise {
 
+class CDCConsumer;
+
 std::unique_ptr<cdc::CDCOutputClient> CreateTwoDCOutputClient(
+    CDCConsumer* cdc_consumer,
     const cdc::ConsumerTabletInfo& consumer_tablet_info,
-    const std::shared_ptr<client::YBClient>& client,
-    std::function<void(const cdc::OutputClientResponse& response)> apply_changes_clbk);
+    const std::shared_ptr<client::YBClient>& local_client,
+    std::function<void(const cdc::OutputClientResponse& response)> apply_changes_clbk,
+    bool use_local_tserver);
 
 } // namespace enterprise
 } // namespace tserver

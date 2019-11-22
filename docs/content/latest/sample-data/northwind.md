@@ -11,7 +11,7 @@ isTocNested: true
 showAsideToc: true
 ---
 
-Download and install the PostgreSQL-compatible version of Northwind on the Yugabyte DB distributed SQL database.
+Download and install the PostgreSQL-compatible version of Northwind on the YugabyteDB distributed SQL database.
 
 ## About the Northwind sample database
 
@@ -36,37 +36,41 @@ Follow the steps here to download and install the Northwind sample database.
 
 ### Before you begin
 
-To use the Northwind sample database, you must have installed and configured Yugabyte DB. To get up and running quickly, see [Quick Start](/latest/quick-start/).
+To use the Northwind sample database, you must have installed and configured YugabyteDB. To get up and running quickly, see [Quick Start](/latest/quick-start/).
 
 ### 1. Download the SQL scripts
 
-You can download the Northwind database files, which are compatible with Yugabyte DB, from the [`sample` directory of the Yugabyte DB GitHub repository](https://github.com/yugabyte/yugabyte-db/tree/master/sample). Here are the two files you’ll need.
+You can download the Northwind database files, which are compatible with YugabyteDB, from the [`sample` directory of the YugabyteDB GitHub repository](https://github.com/yugabyte/yugabyte-db/tree/master/sample). Here are the two files you’ll need.
 
 [northwind_ddl.sql](https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_ddl.sql) — Creates tables and other database objects
 [northwind_data.sql](https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/northwind_data.sql) — Loads the sample data
 
 ### 2. Open the YSQL shell
 
-To open the YSQL shell, run the `ysqlsh` command.
+To open the YSQL shell, run the `ysqlsh` command from the YugabyteDB root directory.
 
-```sh
+``sh
+$ ./bin/ysqlsh
+```
+
+```
 ysqlsh (11.2)
 Type "help" for help.
-postgres=#
+yugabyte=#
 ```
 
 ### 3. Create the Northwind database
 
-To create the Northwind database, run the following CREATE DATABASE command.
+To create the Northwind database, run the following `CREATE DATABASE` statement.
 
-```sql
+```postgresql
 CREATE DATABASE northwind;
 ```
 
 Confirm that you have the Northwind database by listing out the databases on your cluster.
 
 ```
-postgres=# \l
+yugabyte=# \l
 ```
 
 ![Northwind list of databases](/images/datasets/northwind/northwind-list-of-dbs.png)
@@ -74,7 +78,7 @@ postgres=# \l
 Connect to the Northwind database.
 
 ```
-postgres=# \c northwind
+yugabyte=# \c northwind
 You are now connected to database "northwind" as user "postgres".
 northwind=#
 ```
@@ -84,7 +88,7 @@ northwind=#
 To build the tables and database objects, execute the `northwind_ddl.sql` SQL script.
 
 ```
-northwind=# \i /Users/yugabyte/northwind_ddl.sql
+northwind=# \i share/northwind_ddl.sql
 ```
 
 You can verify that all 14 tables have been created by running the `\d` command.
@@ -100,7 +104,7 @@ northwind=# \d
 To load the `northwind` database with sample data, run the `\i` command to execute commands in the `northwind_data.sql` file.
 
 ```
-northwind=# \i /Users/yugabyte/northwind_data.sql
+northwind=# \i share/northwind_data.sql
 ```
 
 To verify that you have some data to work with, you can run a simple SELECT statement to pull data from the `customers` table.
@@ -111,4 +115,4 @@ northwind=# SELECT * FROM customers LIMIT 2;
 
 ## Explore the Northwind database
 
-That’s it! You are now ready to start exploring the Northwind database and Yugabyte DB features using the command line or your favorite PostgreSQL tool.
+That’s it! You are now ready to start exploring the Northwind database and YugabyteDB features using the command line or your favorite PostgreSQL tool.

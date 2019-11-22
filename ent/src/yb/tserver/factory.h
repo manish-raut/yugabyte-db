@@ -21,6 +21,8 @@
 
 #include "yb/server/secure.h"
 
+#include "yb/tserver/ts_tablet_manager.h"
+
 namespace yb {
 
 namespace cqlserver {
@@ -67,10 +69,7 @@ class Factory {
   std::unique_ptr<cqlserver::CQLServer> CreateCQLServer(
       const cqlserver::CQLServerOptions& options, rpc::IoService* io,
       tserver::TabletServer* tserver) {
-    return std::make_unique<CQLServerEnt>(
-        options, io, tserver,
-        std::bind(&TSTabletManager::PreserveLocalLeadersOnly, tserver->tablet_manager(),
-                  std::placeholders::_1));
+    return std::make_unique<CQLServerEnt>(options, io, tserver);
   }
 };
 

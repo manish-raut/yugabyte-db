@@ -103,11 +103,19 @@ class YBSession : public std::enable_shared_from_this<YBSession> {
   // Returns true if our current read point requires restart.
   bool IsRestartRequired();
 
+  // Defer the read hybrid time to the global limit.  Since the global limit should not change for a
+  // session, this call is idempotent.
+  void DeferReadPoint();
+
   // Changed transaction used by this session.
   void SetTransaction(YBTransactionPtr transaction);
 
   // Set the timeout for writes made in this session.
   void SetTimeout(MonoDelta timeout);
+
+  MonoDelta timeout() const {
+    return timeout_;
+  }
 
   CHECKED_STATUS ReadSync(std::shared_ptr<YBOperation> yb_op);
 
@@ -235,7 +243,7 @@ class YBSession : public std::enable_shared_from_this<YBSession> {
 
   ConsistentReadPoint* read_point();
 
-  void SetMemoryLimitScore(double score);
+  void SetRejectionScoreSource(RejectionScoreSourcePtr rejection_score_source);
 
  private:
   friend class YBClient;
@@ -275,7 +283,7 @@ class YBSession : public std::enable_shared_from_this<YBSession> {
 
   internal::AsyncRpcMetricsPtr async_rpc_metrics_;
 
-  double memory_limit_score_ = 0.0;
+  RejectionScoreSourcePtr rejection_score_source_;
 
   DISALLOW_COPY_AND_ASSIGN(YBSession);
 };

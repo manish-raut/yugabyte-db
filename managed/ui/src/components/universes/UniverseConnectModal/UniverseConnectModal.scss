@@ -79,3 +79,12 @@
     }
   }
 }
+
+.yb-code-block {
+  td {
+    max-width: 400px;
+    vertical-align: top;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

@@ -24,24 +24,24 @@ Use the `lastval()` function to return the value returned from the last call to 
 
 Create two sequences and call `nextval()` for each of them.
 
-```sql
-postgres=# CREATE SEQUENCE s1;
+```postgresql
+yugabyte=# CREATE SEQUENCE s1;
 ```
 
 ```
 CREATE SEQUENCE
 ```
 
-```sql
-postgres=# CREATE SEQUENCE s2 START -100 MINVALUE -100;
+```postgresql
+yugabyte=# CREATE SEQUENCE s2 START -100 MINVALUE -100;
 ```
 
 ```
 CREATE SEQUENCE
 ```
 
-```sql
-postgres=# SELECT nextval('s1');
+```postgresql
+yugabyte=# SELECT nextval('s1');
 ```
 
 ```
@@ -51,8 +51,8 @@ postgres=# SELECT nextval('s1');
 (1 row)
 ```
 
-```sql
-postgres=# SELECT nextval('s2');
+```postgresql
+yugabyte=# SELECT nextval('s2');
 ```
 
 ```
@@ -64,8 +64,8 @@ postgres=# SELECT nextval('s2');
 
 Call `lastval()`.
 
-```sql
-postgres=# SELECT lastval()
+```postgresql
+yugabyte=# SELECT lastval()
 ```
 
 ```

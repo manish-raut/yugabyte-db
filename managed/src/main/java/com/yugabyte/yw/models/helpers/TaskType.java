@@ -29,6 +29,8 @@ public enum TaskType {
 
   BackupUniverse("BackupUniverse"),
 
+  MultiTableBackup("MultiTableBackup"),
+
   EditUniverse("EditUniverse"),
 
   EditKubernetesUniverse("EditKubernetesUniverse"),
@@ -52,6 +54,10 @@ public enum TaskType {
   RemoveNodeFromUniverse("RemoveNodeFromUniverse"),
 
   ReleaseInstanceFromUniverse("ReleaseInstanceFromUniverse"),
+
+  SetUniverseKey("SetUniverseKey"),
+
+  SetKubernetesUniverseKey("SetKubernetesUniverseKey"),
 
   // Tasks belonging to subtasks classpath
   AnsibleClusterServerCtl("subtasks.AnsibleClusterServerCtl"),
@@ -134,9 +140,16 @@ public enum TaskType {
 
   EnableEncryptionAtRest("subtasks.EnableEncryptionAtRest"),
 
+  DisableEncryptionAtRest("subtasks.DisableEncryptionAtRest"),
+
   KubernetesCommandExecutor("subtasks.KubernetesCommandExecutor"),
 
-  KubernetesWaitForPod("subtasks.KubernetesWaitForPod");
+  KubernetesWaitForPod("subtasks.KubernetesWaitForPod"),
+
+  @Deprecated
+  CopyEncryptionKeyFile("subtasks.CopyEncryptionKeyFile"),
+
+  WaitForEncryptionKeyInMemory("subtasks.WaitForEncryptionKeyInMemory");
 
   private String relativeClassPath;
 

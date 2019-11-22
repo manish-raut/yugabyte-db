@@ -89,8 +89,8 @@ It gives ownership of the sequence to the specified column (if any). This means 
 
 Create a simple sequence.
 
-```sql
-postgres=# CREATE SEQUENCE s;
+```postgresql
+yugabyte=# CREATE SEQUENCE s;
 ```
 
 ```
@@ -99,16 +99,16 @@ CEATE SEQUENCE
 
 Modify the increment value.
 
-```sql
-postgres=# ALTER SEQUENCE s INCREMENT BY 5;
+```postgresql
+yugabyte=# ALTER SEQUENCE s INCREMENT BY 5;
 ```
 
 ```
 ALTER SEQUENCE
 ```
 
-```sql
-postgres=# SELECT nextval('s');
+```postgresql
+yugabyte=# SELECT nextval('s');
 ```
 
 ```
@@ -118,8 +118,8 @@ postgres=# SELECT nextval('s');
 (1 row)
 ```
 
-```sql
-postgres=# SELECT nextval('s');
+```postgresql
+yugabyte=# SELECT nextval('s');
 ```
 
 ```
@@ -131,16 +131,16 @@ postgres=# SELECT nextval('s');
 
 Modify the starting value.
 
-```sql
-postgres=# ALTER SEQUENCE s RESTART WITH 2;
+```postgresql
+yugabyte=# ALTER SEQUENCE s RESTART WITH 2;
 ```
 
 ```
 ALTER SEQUENCE
 ```
 
-```sql
-postgres=# SELECT nextval('s');
+```postgresql
+yugabyte=# SELECT nextval('s');
 ```
 
 ```
@@ -150,8 +150,8 @@ postgres=# SELECT nextval('s');
 (1 row)
 ```
 
-```sql
-postgres=# SELECT nextval('s');
+```postgresql
+yugabyte=# SELECT nextval('s');
 ```
 
 ```

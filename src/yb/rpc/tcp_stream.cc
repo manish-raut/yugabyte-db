@@ -179,7 +179,12 @@ TcpStream::FillIovResult TcpStream::FillIov(iovec* out) {
 }
 
 Status TcpStream::DoWrite() {
+  DVLOG_WITH_PREFIX(5) << "sending_.size(): " << sending_.size();
   if (!connected_ || waiting_write_ready_ || !is_epoll_registered_) {
+    DVLOG_WITH_PREFIX(5)
+        << "connected_: " << connected_
+        << " waiting_write_ready_: " << waiting_write_ready_
+        << " is_epoll_registered_: " << is_epoll_registered_;
     return Status::OK();
   }
 
@@ -206,6 +211,7 @@ Status TcpStream::DoWrite() {
         YB_LOG_WITH_PREFIX_EVERY_N(WARNING, 50) << "Send failed: " << status;
         return status;
       } else {
+        VLOG_WITH_PREFIX(3) << "Send temporary failed: " << status;
         return Status::OK();
       }
     }
@@ -241,7 +247,7 @@ void TcpStream::PopSending() {
 
 void TcpStream::Handler(ev::io& watcher, int revents) {  // NOLINT
   DVLOG_WITH_PREFIX(4) << "Handler(revents=" << revents << ")";
-  auto status = Status::OK();
+  Status status = Status::OK();
   if (revents & ev::ERROR) {
     status = STATUS(NetworkError, ToString() + ": Handler encountered an error");
     VLOG_WITH_PREFIX(3) << status;
@@ -410,7 +416,7 @@ size_t TcpStream::Send(OutboundDataPtr data) {
   // Serialize the actual bytes to be put on the wire.
   sending_.emplace_back(std::move(data), mem_tracker_);
   queued_bytes_to_send_ += sending_.back().bytes_size();
-  DVLOG_WITH_PREFIX(4) << "Added data queued_bytes_to_send_: " << queued_bytes_to_send_;
+  DVLOG_WITH_PREFIX(4) << "Queued data, queued_bytes_to_send_: " << queued_bytes_to_send_;
 
   return result;
 }

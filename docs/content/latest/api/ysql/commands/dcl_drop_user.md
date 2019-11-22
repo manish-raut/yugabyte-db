@@ -51,8 +51,8 @@ See [`DROP ROLE`](../dcl_drop_role) for more details.
 
 - Drop a user.
 
-```sql
-postgres=# DROP USER John;
+```postgresql
+yugabyte=# DROP USER John;
 ```
 
 ## See also

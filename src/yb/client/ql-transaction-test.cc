@@ -20,6 +20,8 @@
 #include "yb/client/transaction.h"
 #include "yb/client/transaction_rpc.h"
 
+#include "yb/common/ql_value.h"
+
 #include "yb/consensus/consensus.h"
 
 #include "yb/rpc/rpc.h"
@@ -412,12 +414,7 @@ TEST_F(QLTransactionTest, Heartbeat) {
   auto session = CreateSession(txn);
   WriteRows(session);
   std::this_thread::sleep_for(GetTransactionTimeout() * 2);
-  CountDownLatch latch(1);
-  txn->Commit([&latch](const Status& status) {
-    EXPECT_OK(status);
-    latch.CountDown();
-  });
-  latch.Wait();
+  ASSERT_OK(txn->CommitFuture().get());
   VerifyData();
   CheckNoRunningTransactions();
 }
@@ -428,12 +425,8 @@ TEST_F(QLTransactionTest, Expire) {
   auto session = CreateSession(txn);
   WriteRows(session);
   std::this_thread::sleep_for(GetTransactionTimeout() * 2);
-  CountDownLatch latch(1);
-  txn->Commit([&latch](const Status& status) {
-    EXPECT_TRUE(status.IsExpired()) << "Bad status: " << status.ToString();
-    latch.CountDown();
-  });
-  latch.Wait();
+  auto commit_status = txn->CommitFuture().get();
+  ASSERT_TRUE(commit_status.IsExpired()) << "Bad status: " << commit_status;
   std::this_thread::sleep_for(std::chrono::microseconds(FLAGS_transaction_heartbeat_usec * 2));
   ASSERT_OK(cluster_->CleanTabletLogs());
   ASSERT_FALSE(HasTransactions());
@@ -750,6 +743,12 @@ TEST_F(QLTransactionTest, ResolveIntentsWriteReadWithinTransactionAndRollback) {
     VERIFY_ROW(session, 1, 11);
     VERIFY_ROW(session, 2, 12);
 
+    // Need to wait transaction to be replicated to all tablet replicas, otherwise direct intents
+    // cleanup could not happen.
+    ASSERT_OK(WaitFor([this] {
+      return CountRunningTransactions() == 6;
+    }, 10s, "Wait transactions replicated to all tablet replicas"));
+
     txn->Abort();
   }
 
@@ -825,7 +824,11 @@ TEST_F_EX(QLTransactionTest, IntentsCleanupAfterRestart, QLTransactionTestWithDi
   FLAGS_transaction_disable_proactive_cleanup_in_tests = true;
   FLAGS_aborted_intent_cleanup_ms = 1000; // 1 sec
 
+#ifndef NDEBUG
   const int kTransactions = 10;
+#else
+  const int kTransactions = 20;
+#endif
 
   LOG(INFO) << "Write values";
 
@@ -1389,6 +1392,7 @@ class RemoteBootstrapTest : public QLTransactionTest {
  protected:
   void SetUp() override {
     FLAGS_remote_bootstrap_max_chunk_size = 1_KB;
+    FLAGS_log_min_seconds_to_retain = 1;
     QLTransactionTest::SetUp();
   }
 };
@@ -1409,7 +1413,6 @@ TEST_F_EX(QLTransactionTest, RemoteBootstrap, RemoteBootstrapTest) {
 
   DisableTransactionTimeout();
   DisableApplyingIntents();
-  FLAGS_log_min_seconds_to_retain = 1;
 
   cluster_->mini_tablet_server(0)->Shutdown();
 
@@ -1602,6 +1605,10 @@ TEST_F_EX(QLTransactionTest, DeleteFlushedIntents, QLTransactionTestSingleTablet
 // Then performs non transactional writes and checks that log size stabilizes, meaning
 // log gc is working.
 TEST_F_EX(QLTransactionTest, GCLogsAfterTransactionalWritesStop, QLTransactionTestSingleTablet) {
+  // An amount of time during which we require log size to be stable.
+  const MonoDelta kStableTimePeriod = 10s;
+  const MonoDelta kTimeout = 30s + kStableTimePeriod;
+
   LOG(INFO) << "Perform transactional writes, to get non empty intents db";
   TestThreadHolder thread_holder;
   std::atomic<bool> use_transaction(true);
@@ -1648,7 +1655,6 @@ TEST_F_EX(QLTransactionTest, GCLogsAfterTransactionalWritesStop, QLTransactionTe
   use_transaction.store(false, std::memory_order_release);
   uint64_t max_log_size = 0;
   auto last_log_size_increment = CoarseMonoClock::now();
-  MonoDelta kTimeout = 30s;
   auto deadline = last_log_size_increment + kTimeout;
   while (!thread_holder.stop_flag().load(std::memory_order_acquire)) {
     auto now = CoarseMonoClock::now();
@@ -1662,15 +1668,17 @@ TEST_F_EX(QLTransactionTest, GCLogsAfterTransactionalWritesStop, QLTransactionTe
       }
       uint64_t current_log_size = log->OnDiskSize();
       if (current_log_size > max_log_size) {
-        LOG(INFO) << "Log size increased: " << current_log_size;
+        LOG(INFO) << Format("T $1 P $0: Log size increased: $2", peer->permanent_uuid(),
+                            peer->tablet_id(), current_log_size);
         last_log_size_increment = now;
         max_log_size = current_log_size;
       }
     }
-    if (now - last_log_size_increment > 15s) {
+    if (now - last_log_size_increment > kStableTimePeriod) {
       break;
     } else {
-      ASSERT_LE(now, deadline) << "Log size did not stabilize in " << kTimeout;
+      ASSERT_LE(last_log_size_increment + kStableTimePeriod, deadline)
+          << "Log size would not stabilize in " << kTimeout;
     }
     std::this_thread::sleep_for(100ms);
   }

@@ -51,6 +51,7 @@
 #include "yb/rocksdb/utilities/checkpoint.h"
 #include "yb/rocksdb/write_batch.h"
 #include "yb/rocksdb/util/file_util.h"
+#include "yb/rocksutil/write_batch_formatter.h"
 
 #include "yb/client/error.h"
 #include "yb/client/table.h"
@@ -60,10 +61,12 @@
 
 #include "yb/common/common.pb.h"
 #include "yb/common/hybrid_time.h"
-#include "yb/common/schema.h"
 #include "yb/common/ql_protocol.pb.h"
 #include "yb/common/ql_rowblock.h"
 #include "yb/common/pgsql_error.h"
+#include "yb/common/row_mark.h"
+#include "yb/common/schema.h"
+#include "yb/common/transaction_error.h"
 
 #include "yb/consensus/consensus.h"
 #include "yb/consensus/consensus.pb.h"
@@ -162,6 +165,10 @@ DEFINE_test_flag(
     "After modifying the flushed frontier in RocksDB, verify that the restored value of it "
     "is as expected. Used for testing.");
 
+DEFINE_test_flag(
+    bool, docdb_log_write_batches, false,
+    "Dump write batches being written to RocksDB");
+
 DECLARE_int32(rocksdb_level0_slowdown_writes_trigger);
 DECLARE_int32(rocksdb_level0_stop_writes_trigger);
 
@@ -213,6 +220,7 @@ using docdb::DocRowwiseIterator;
 using docdb::DocWriteBatch;
 using docdb::SubDocKey;
 using docdb::PrimitiveValue;
+using docdb::StorageDbType;
 
 ////////////////////////////////////////////////////////////
 // Tablet
@@ -583,7 +591,6 @@ Status Tablet::OpenKeyValueTablet() {
       Format("$0-$1", kIntentsDB, tablet_id()), block_based_table_mem_tracker_);
 
     rocksdb::DB* intents_db = nullptr;
-    rocksdb_options.in_memory_erase = true;
     RETURN_NOT_OK(rocksdb::DB::Open(rocksdb_options, db_dir + kIntentsDBSuffix, &intents_db));
     intents_db_.reset(intents_db);
   }
@@ -614,9 +621,9 @@ Status Tablet::EnableCompactions() {
   Status regular_db_status;
   std::unordered_map<std::string, std::string> new_options = {
       { "level0_slowdown_writes_trigger"s,
-        std::to_string(FLAGS_rocksdb_level0_slowdown_writes_trigger)},
+        std::to_string(max_if_negative(FLAGS_rocksdb_level0_slowdown_writes_trigger))},
       { "level0_stop_writes_trigger"s,
-        std::to_string(FLAGS_rocksdb_level0_stop_writes_trigger)},
+        std::to_string(max_if_negative(FLAGS_rocksdb_level0_stop_writes_trigger))},
   };
   if (regular_db_) {
     WARN_WITH_PREFIX_NOT_OK(
@@ -653,7 +660,7 @@ void Tablet::SetShutdownRequestedFlag() {
   shutdown_requested_.store(true, std::memory_order::memory_order_release);
 }
 
-void Tablet::Shutdown() {
+void Tablet::Shutdown(IsDropTable is_drop_table) {
   SetShutdownRequestedFlag();
 
   auto op_pause = PauseReadWriteOperations();
@@ -667,6 +674,13 @@ void Tablet::Shutdown() {
   }
 
   std::lock_guard<rw_spinlock> lock(component_lock_);
+  if (intents_db_) {
+    intents_db_.get()->SetDisableFlushOnShutdown(is_drop_table);
+  }
+  if (regular_db_) {
+    regular_db_.get()->SetDisableFlushOnShutdown(is_drop_table);
+  }
+
   // Shutdown the RocksDB instance for this table, if present.
   // Destroy intents and regular DBs in reverse order to their creation.
   // Also it makes sure that regular DB is alive during flush filter of intents db.
@@ -724,8 +738,10 @@ void Tablet::StartOperation(WriteOperationState* operation_state) {
   // before a crash or at another node.
   HybridTime ht = operation_state->hybrid_time_even_if_unset();
   bool was_valid = ht.is_valid();
-  mvcc_.AddPending(&ht);
   if (!was_valid) {
+    // Add only leader operation here, since follower operations already registered in MVCC,
+    // as soon as they received.
+    mvcc_.AddPending(&ht);
     operation_state->set_hybrid_time(ht);
   }
 }
@@ -802,8 +818,7 @@ Status Tablet::PrepareTransactionWriteBatch(
       FullyDecodeTransactionId(put_batch.transaction().transaction_id()));
   if (put_batch.transaction().has_isolation()) {
     // Store transaction metadata (status tablet, isolation level etc.)
-    if (!transaction_participant()->Add(
-            put_batch.transaction(), put_batch.may_have_metadata(), rocksdb_write_batch)) {
+    if (!transaction_participant()->Add(put_batch.transaction(), rocksdb_write_batch)) {
       return STATUS(TryAgain,
                     Format("Transaction was recently aborted: $0", transaction_id), Slice(),
                     PgsqlError(YBPgErrorCode::YB_PG_IN_FAILED_SQL_TRANSACTION));
@@ -844,20 +859,26 @@ Status Tablet::ApplyKeyValueRowOperations(const KeyValueWriteBatchPB& put_batch,
   if (put_batch.has_transaction()) {
     RequestScope request_scope(transaction_participant_.get());
     RETURN_NOT_OK(PrepareTransactionWriteBatch(put_batch, hybrid_time, &write_batch));
-    WriteBatch(frontiers, &write_batch, intents_db_.get());
+    WriteToRocksDB(frontiers, &write_batch, StorageDbType::kIntents);
   } else {
     PrepareNonTransactionWriteBatch(put_batch, hybrid_time, &write_batch);
-    WriteBatch(frontiers, &write_batch, regular_db_.get());
+    WriteToRocksDB(frontiers, &write_batch, StorageDbType::kRegular);
   }
 
   return Status::OK();
 }
 
-void Tablet::WriteBatch(const rocksdb::UserFrontiers* frontiers,
-                        rocksdb::WriteBatch* write_batch,
-                        rocksdb::DB* dest_db) {
+void Tablet::WriteToRocksDB(
+    const rocksdb::UserFrontiers* frontiers,
+    rocksdb::WriteBatch* write_batch,
+    docdb::StorageDbType storage_db_type) {
   if (write_batch->Count() == 0) {
     return;
+  }
+  rocksdb::DB* dest_db = nullptr;
+  switch (storage_db_type) {
+    case StorageDbType::kRegular: dest_db = regular_db_.get(); break;
+    case StorageDbType::kIntents: dest_db = intents_db_.get(); break;
   }
 
   write_batch->SetFrontiers(frontiers);
@@ -871,6 +892,13 @@ void Tablet::WriteBatch(const rocksdb::UserFrontiers* frontiers,
   if (!rocksdb_write_status.ok()) {
     LOG_WITH_PREFIX(FATAL) << "Failed to write a batch with " << write_batch->Count()
                            << " operations into RocksDB: " << rocksdb_write_status;
+  }
+
+  if (FLAGS_docdb_log_write_batches) {
+    LOG_WITH_PREFIX(INFO)
+        << "Wrote " << write_batch->Count() << " key/value pairs to " << storage_db_type
+        << " RocksDB:\n" << docdb::WriteBatchToString(
+            *write_batch, storage_db_type, BinaryOutputFormat::kEscapedAndHex);
   }
 }
 
@@ -889,8 +917,7 @@ void SetupKeyValueBatch(WriteRequestPB* write_request, WriteRequestPB* batch_req
     write_request->mutable_write_batch()->mutable_transaction()->Swap(
         batch_request->mutable_write_batch()->mutable_transaction());
   }
-  write_request->mutable_write_batch()->set_may_have_metadata(
-      batch_request->write_batch().may_have_metadata());
+  write_request->mutable_write_batch()->set_deprecated_may_have_metadata(true);
   if (batch_request->has_request_id()) {
     write_request->set_client_id1(batch_request->client_id1());
     write_request->set_client_id2(batch_request->client_id2());
@@ -1433,7 +1460,7 @@ Status Tablet::ApplyIntents(const TransactionApplyData& data) {
   // We don't set transaction field of put_batch, otherwise we would write another bunch of intents.
   docdb::ConsensusFrontiers frontiers;
   InitFrontiers(data, &frontiers);
-  WriteBatch(&frontiers, &regular_write_batch, regular_db_.get());
+  WriteToRocksDB(&frontiers, &regular_write_batch, StorageDbType::kRegular);
   return Status::OK();
 }
 
@@ -1451,7 +1478,7 @@ CHECKED_STATUS Tablet::RemoveIntentsImpl(const RemoveIntentsData& data, const Id
 
   docdb::ConsensusFrontiers frontiers;
   InitFrontiers(data, &frontiers);
-  WriteBatch(&frontiers, &intents_write_batch, intents_db_.get());
+  WriteToRocksDB(&frontiers, &intents_write_batch, StorageDbType::kIntents);
   return Status::OK();
 }
 
@@ -1823,7 +1850,6 @@ Result<HybridTime> Tablet::OldestMutableMemtableWriteHybridTime() const {
   return result;
 }
 
-
 Status Tablet::DebugDump(vector<string> *lines) {
   switch (table_type_) {
     case TableType::PGSQL_TABLE_TYPE: FALLTHROUGH_INTENDED;
@@ -1847,20 +1873,26 @@ Status Tablet::TEST_SwitchMemtable() {
   ScopedPendingOperation scoped_operation(&pending_op_counter_);
   RETURN_NOT_OK(scoped_operation);
 
-  regular_db_->TEST_SwitchMemtable();
+  if (regular_db_) {
+    regular_db_->TEST_SwitchMemtable();
+  } else {
+    LOG_WITH_PREFIX(INFO) << "Ignoring TEST_SwitchMemtable: no regular RocksDB";
+  }
   return Status::OK();
 }
 
 Status Tablet::StartDocWriteOperation(WriteOperation* operation) {
   auto write_batch = operation->request()->mutable_write_batch();
-  auto isolation_level = VERIFY_RESULT(GetIsolationLevelFromPB(*write_batch));
+  const IsolationLevel isolation_level = VERIFY_RESULT(GetIsolationLevelFromPB(*write_batch));
+  const RowMarkType row_mark_type = GetRowMarkTypeFromPB(*write_batch);
 
   const bool transactional_table = metadata_->schema().table_properties().is_transactional();
+
   const auto partial_range_key_intents = UsePartialRangeKeyIntents(metadata_.get());
   auto prepare_result = VERIFY_RESULT(docdb::PrepareDocWriteOperation(
       operation->doc_ops(), write_batch->read_pairs(), metrics_->write_lock_latency,
-      isolation_level, operation->state()->kind(), transactional_table, operation->deadline(),
-      partial_range_key_intents, &shared_lock_manager_));
+      isolation_level, operation->state()->kind(), row_mark_type, transactional_table,
+      operation->deadline(), partial_range_key_intents, &shared_lock_manager_));
 
   RequestScope request_scope;
   if (transaction_participant_) {
@@ -1874,7 +1906,8 @@ Status Tablet::StartDocWriteOperation(WriteOperation* operation) {
     if (isolation_level == IsolationLevel::NON_TRANSACTIONAL) {
       auto now = clock_->Now();
       auto result = VERIFY_RESULT(docdb::ResolveOperationConflicts(
-          operation->doc_ops(), now, doc_db(), transaction_participant_.get()));
+          operation->doc_ops(), now, doc_db(), partial_range_key_intents,
+          transaction_participant_.get()));
       if (now != result) {
         clock_->Update(result);
       }
@@ -2029,12 +2062,14 @@ HybridTime Tablet::UpdateHistoryCutoff(HybridTime proposed_cutoff) {
 Status Tablet::RegisterReaderTimestamp(HybridTime read_point) {
   std::lock_guard<std::mutex> lock(active_readers_mutex_);
   if (read_point < earliest_read_time_allowed_) {
-    return STATUS_FORMAT(
+    return STATUS(
         SnapshotTooOld,
-        "Snapshot too old. Read point: $0, earliest read time allowed: $1, delta (usec): $2",
-        read_point,
-        earliest_read_time_allowed_,
-        earliest_read_time_allowed_.PhysicalDiff(read_point));
+        Format(
+          "Snapshot too old. Read point: $0, earliest read time allowed: $1, delta (usec): $2",
+          read_point,
+          earliest_read_time_allowed_,
+          earliest_read_time_allowed_.PhysicalDiff(read_point)),
+        TransactionError(TransactionErrorCode::kSnapshotTooOld));
 }
   active_readers_cnt_[read_point]++;
   return Status::OK();

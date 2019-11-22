@@ -43,9 +43,11 @@
 #include "yb/gutil/map-util.h"
 #include "yb/gutil/strings/substitute.h"
 
+#include "yb/client/client_utils.h"
 #include "yb/client/meta_cache.h"
 #include "yb/client/session.h"
 #include "yb/client/table_alterer.h"
+#include "yb/client/namespace_alterer.h"
 #include "yb/client/table_creator.h"
 #include "yb/client/tablet_server.h"
 
@@ -97,6 +99,8 @@ using yb::master::ListTabletServersResponsePB;
 using yb::master::ListTabletServersResponsePB_Entry;
 using yb::master::CreateNamespaceRequestPB;
 using yb::master::CreateNamespaceResponsePB;
+using yb::master::AlterNamespaceRequestPB;
+using yb::master::AlterNamespaceResponsePB;
 using yb::master::DeleteNamespaceRequestPB;
 using yb::master::DeleteNamespaceResponsePB;
 using yb::master::ListNamespacesRequestPB;
@@ -160,8 +164,6 @@ TAG_FLAG(client_suppress_created_logs, hidden);
 
 DEFINE_test_flag(int32, yb_num_total_tablets, 0,
                  "The total number of tablets per table when a table is created.");
-
-DECLARE_bool(running_test);
 
 namespace yb {
 namespace client {
@@ -271,6 +273,11 @@ YBClientBuilder& YBClientBuilder::add_master_server_endpoint(const string& endpo
   return *this;
 }
 
+YBClientBuilder& YBClientBuilder::skip_master_flagfile(bool should_skip) {
+  data_->skip_master_flagfile_ = should_skip;
+  return *this;
+}
+
 YBClientBuilder& YBClientBuilder::default_admin_operation_timeout(const MonoDelta& timeout) {
   data_->default_admin_operation_timeout_ = timeout;
   return *this;
@@ -333,21 +340,17 @@ Status YBClientBuilder::DoBuild(rpc::Messenger* messenger, std::unique_ptr<YBCli
     c->data_->messenger_holder_ = nullptr;
     c->data_->messenger_ = messenger;
   } else {
-    MessengerBuilder builder(data_->client_name_);
-    builder.set_num_reactors(data_->num_reactors_);
-    builder.set_metric_entity(data_->metric_entity_);
-    builder.UseDefaultConnectionContextFactory(data_->parent_mem_tracker_);
-    c->data_->messenger_holder_ = VERIFY_RESULT(builder.Build());
+    c->data_->messenger_holder_ = VERIFY_RESULT(client::CreateClientMessenger(
+        data_->client_name_, data_->num_reactors_,
+        data_->metric_entity_, data_->parent_mem_tracker_));
     c->data_->messenger_ = c->data_->messenger_holder_.get();
-    if (FLAGS_running_test) {
-      c->data_->messenger_->TEST_SetOutboundIpBase(VERIFY_RESULT(HostToAddress("127.0.0.1")));
-    }
   }
   c->data_->proxy_cache_ = std::make_unique<rpc::ProxyCache>(c->data_->messenger_);
   c->data_->metric_entity_ = data_->metric_entity_;
 
   c->data_->master_server_endpoint_ = data_->master_server_endpoint_;
   c->data_->master_server_addrs_ = data_->master_server_addrs_;
+  c->data_->skip_master_flagfile_ = data_->skip_master_flagfile_;
   c->data_->default_admin_operation_timeout_ = data_->default_admin_operation_timeout_;
   c->data_->default_rpc_timeout_ = data_->default_rpc_timeout_;
 
@@ -578,25 +581,26 @@ Status YBClient::DeleteNamespace(const std::string& namespace_name,
   return Status::OK();
 }
 
-Status YBClient::ListNamespaces(const boost::optional<YQLDatabase>& database_type,
-                                std::vector<std::string>* namespace_names,
-                                std::vector<std::string>* namespace_ids) {
+YBNamespaceAlterer* YBClient::NewNamespaceAlterer(
+    const string& namespace_name, const std::string& namespace_id) {
+  return new YBNamespaceAlterer(this, namespace_name, namespace_id);
+}
+
+Result<vector<master::NamespaceIdentifierPB>> YBClient::ListNamespaces(
+    const boost::optional<YQLDatabase>& database_type) {
   ListNamespacesRequestPB req;
   ListNamespacesResponsePB resp;
   if (database_type) {
     req.set_database_type(*database_type);
   }
   CALL_SYNC_LEADER_MASTER_RPC(req, resp, ListNamespaces);
-
-  for (auto ns : resp.namespaces()) {
-    if (namespace_names != nullptr) {
-      namespace_names->push_back(ns.name());
-    }
-    if (namespace_ids != nullptr) {
-      namespace_ids->push_back(ns.id());
-    }
+  auto* namespaces = resp.mutable_namespaces();
+  vector<master::NamespaceIdentifierPB> result;
+  result.reserve(namespaces->size());
+  for (auto& ns : *namespaces) {
+    result.push_back(std::move(ns));
   }
-  return Status::OK();
+  return result;
 }
 
 Status YBClient::ReservePgsqlOids(const std::string& namespace_id,
@@ -650,11 +654,8 @@ Status YBClient::GrantRevokePermission(GrantRevokeStatementType statement_type,
 
 Result<bool> YBClient::NamespaceExists(const std::string& namespace_name,
                                        const boost::optional<YQLDatabase>& database_type) {
-  std::vector<std::string> namespace_names;
-  RETURN_NOT_OK(ListNamespaces(database_type, &namespace_names));
-
-  for (const string& name : namespace_names) {
-    if (name == namespace_name) {
+  for (const auto& ns : VERIFY_RESULT(ListNamespaces(database_type))) {
+    if (ns.name() == namespace_name) {
       return true;
     }
   }
@@ -663,20 +664,17 @@ Result<bool> YBClient::NamespaceExists(const std::string& namespace_name,
 
 Result<bool> YBClient::NamespaceIdExists(const std::string& namespace_id,
                                          const boost::optional<YQLDatabase>& database_type) {
-  std::vector<std::string> namespace_ids;
-  RETURN_NOT_OK(ListNamespaces(database_type, nullptr /* namespace_names */, &namespace_ids));
-
-  for (const string& id : namespace_ids) {
-    if (namespace_id == id) {
+  for (const auto& ns : VERIFY_RESULT(ListNamespaces(database_type))) {
+    if (ns.id() == namespace_id) {
       return true;
     }
   }
   return false;
 }
 
-CHECKED_STATUS YBClient::GetUDType(const std::string& namespace_name,
-                                   const std::string& type_name,
-                                   std::shared_ptr<QLType>* ql_type) {
+Status YBClient::GetUDType(const std::string& namespace_name,
+                           const std::string& type_name,
+                           std::shared_ptr<QLType>* ql_type) {
   // Setting up request.
   GetUDTypeInfoRequestPB req;
   req.mutable_type()->mutable_namespace_()->set_name(namespace_name);
@@ -702,10 +700,10 @@ CHECKED_STATUS YBClient::GetUDType(const std::string& namespace_name,
   return Status::OK();
 }
 
-CHECKED_STATUS YBClient::CreateRole(const RoleName& role_name,
-                                    const std::string& salted_hash,
-                                    const bool login, const bool superuser,
-                                    const RoleName& creator_role_name) {
+Status YBClient::CreateRole(const RoleName& role_name,
+                            const std::string& salted_hash,
+                            const bool login, const bool superuser,
+                            const RoleName& creator_role_name) {
 
   // Setting up request.
   CreateRoleRequestPB req;
@@ -723,11 +721,11 @@ CHECKED_STATUS YBClient::CreateRole(const RoleName& role_name,
   return Status::OK();
 }
 
-CHECKED_STATUS YBClient::AlterRole(const RoleName& role_name,
-                                   const boost::optional<std::string>& salted_hash,
-                                   const boost::optional<bool> login,
-                                   const boost::optional<bool> superuser,
-                                   const RoleName& current_role_name) {
+Status YBClient::AlterRole(const RoleName& role_name,
+                           const boost::optional<std::string>& salted_hash,
+                           const boost::optional<bool> login,
+                           const boost::optional<bool> superuser,
+                           const RoleName& current_role_name) {
   // Setting up request.
   AlterRoleRequestPB req;
   req.set_name(role_name);
@@ -747,8 +745,8 @@ CHECKED_STATUS YBClient::AlterRole(const RoleName& role_name,
   return Status::OK();
 }
 
-CHECKED_STATUS YBClient::DeleteRole(const std::string& role_name,
-                                    const std::string& current_role_name) {
+Status YBClient::DeleteRole(const std::string& role_name,
+                            const std::string& current_role_name) {
   // Setting up request.
   DeleteRoleRequestPB req;
   req.set_name(role_name);
@@ -760,12 +758,12 @@ CHECKED_STATUS YBClient::DeleteRole(const std::string& role_name,
 }
 
 static const string kRequirePass = "requirepass";
-CHECKED_STATUS YBClient::SetRedisPasswords(const std::vector<string>& passwords) {
+Status YBClient::SetRedisPasswords(const std::vector<string>& passwords) {
   // TODO: Store hash instead of the password?
   return SetRedisConfig(kRequirePass, passwords);
 }
 
-CHECKED_STATUS YBClient::GetRedisPasswords(vector<string>* passwords) {
+Status YBClient::GetRedisPasswords(vector<string>* passwords) {
   Status s = GetRedisConfig(kRequirePass, passwords);
   if (s.IsNotFound()) {
     // If the redis config has no kRequirePass key.
@@ -775,7 +773,7 @@ CHECKED_STATUS YBClient::GetRedisPasswords(vector<string>* passwords) {
   return s;
 }
 
-CHECKED_STATUS YBClient::SetRedisConfig(const string& key, const vector<string>& values) {
+Status YBClient::SetRedisConfig(const string& key, const vector<string>& values) {
   // Setting up request.
   RedisConfigSetRequestPB req;
   req.set_keyword(key);
@@ -787,7 +785,7 @@ CHECKED_STATUS YBClient::SetRedisConfig(const string& key, const vector<string>&
   return Status::OK();
 }
 
-CHECKED_STATUS YBClient::GetRedisConfig(const string& key, vector<string>* values) {
+Status YBClient::GetRedisConfig(const string& key, vector<string>* values) {
   // Setting up request.
   RedisConfigGetRequestPB req;
   RedisConfigGetResponsePB resp;
@@ -799,9 +797,9 @@ CHECKED_STATUS YBClient::GetRedisConfig(const string& key, vector<string>* value
   return Status::OK();
 }
 
-CHECKED_STATUS YBClient::GrantRevokeRole(GrantRevokeStatementType statement_type,
-                                         const std::string& granted_role_name,
-                                         const std::string& recipient_role_name) {
+Status YBClient::GrantRevokeRole(GrantRevokeStatementType statement_type,
+                                 const std::string& granted_role_name,
+                                 const std::string& recipient_role_name) {
   // Setting up request.
   GrantRevokeRoleRequestPB req;
   req.set_revoke(statement_type == GrantRevokeStatementType::REVOKE);
@@ -859,10 +857,10 @@ Status YBClient::GetPermissions(client::internal::PermissionsCache* permissions_
   return Status::OK();
 }
 
-CHECKED_STATUS YBClient::CreateUDType(const std::string& namespace_name,
-                                      const std::string& type_name,
-                                      const std::vector<std::string>& field_names,
-                                      const std::vector<std::shared_ptr<QLType>>& field_types) {
+Status YBClient::CreateUDType(const std::string& namespace_name,
+                              const std::string& type_name,
+                              const std::vector<std::string>& field_names,
+                              const std::vector<std::shared_ptr<QLType>>& field_types) {
   // Setting up request.
   CreateUDTypeRequestPB req;
   req.mutable_namespace_()->set_name(namespace_name);
@@ -879,8 +877,8 @@ CHECKED_STATUS YBClient::CreateUDType(const std::string& namespace_name,
   return Status::OK();
 }
 
-CHECKED_STATUS YBClient::DeleteUDType(const std::string& namespace_name,
-                                      const std::string& type_name) {
+Status YBClient::DeleteUDType(const std::string& namespace_name,
+                              const std::string& type_name) {
   // Setting up request.
   DeleteUDTypeRequestPB req;
   req.mutable_type()->mutable_namespace_()->set_name(namespace_name);
@@ -916,9 +914,9 @@ void YBClient::CreateCDCStream(const TableId& table_id,
   data_->CreateCDCStream(this, table_id, options, deadline, callback);
 }
 
-CHECKED_STATUS YBClient::GetCDCStream(const CDCStreamId& stream_id,
-                                      TableId* table_id,
-                                      std::unordered_map<std::string, std::string>* options) {
+Status YBClient::GetCDCStream(const CDCStreamId& stream_id,
+                              TableId* table_id,
+                              std::unordered_map<std::string, std::string>* options) {
   // Setting up request.
   GetCDCStreamRequestPB req;
   req.set_stream_id(stream_id);
@@ -939,10 +937,27 @@ CHECKED_STATUS YBClient::GetCDCStream(const CDCStreamId& stream_id,
   return Status::OK();
 }
 
-CHECKED_STATUS YBClient::DeleteCDCStream(const CDCStreamId& stream_id) {
+Status YBClient::DeleteCDCStream(const vector<CDCStreamId>& streams) {
+  if (streams.empty()) {
+    return STATUS(InvalidArgument, "At least one stream id should be provided");
+  }
+
   // Setting up request.
   DeleteCDCStreamRequestPB req;
-  req.set_stream_id(stream_id);
+  req.mutable_stream_id()->Reserve(streams.size());
+  for (const auto& stream : streams) {
+    req.add_stream_id(stream);
+  }
+
+  DeleteCDCStreamResponsePB resp;
+  CALL_SYNC_LEADER_MASTER_RPC(req, resp, DeleteCDCStream);
+  return Status::OK();
+}
+
+Status YBClient::DeleteCDCStream(const CDCStreamId& stream_id) {
+  // Setting up request.
+  DeleteCDCStreamRequestPB req;
+  req.add_stream_id(stream_id);
 
   DeleteCDCStreamResponsePB resp;
   CALL_SYNC_LEADER_MASTER_RPC(req, resp, DeleteCDCStream);
@@ -990,7 +1005,7 @@ Result<bool> YBClient::IsLoadBalanced(uint32_t num_servers) {
   req.set_expected_num_servers(num_servers);
   // Cannot use CALL_SYNC_LEADER_MASTER_RPC directly since this is susbstituted with RETURN_NOT_OK
   // and we want to capture the status to check if load is balanced.
-  Status s = [&, this]() {
+  Status s = [&, this]() -> Status {
     CALL_SYNC_LEADER_MASTER_RPC(req, resp, IsLoadBalanced);
     return Status::OK();
   }();
@@ -1205,10 +1220,9 @@ Status YBClient::SetReplicationInfo(const ReplicationInfoPB& replication_info) {
   return data_->SetReplicationInfo(this, replication_info, deadline);
 }
 
-Status YBClient::ListTables(
-    vector<YBTableName>* tables,
-    const string& filter,
-    bool exclude_ysql) {
+Status YBClient::ListTables(vector<YBTableName>* tables,
+                            const string& filter,
+                            bool exclude_ysql) {
   std::vector<std::pair<std::string, YBTableName>> tables_with_ids;
   RETURN_NOT_OK(ListTablesWithIds(&tables_with_ids, filter, exclude_ysql));
   tables->clear();
@@ -1241,8 +1255,11 @@ Status YBClient::ListTablesWithIds(
     }
     tables_with_ids->emplace_back(
         table_info.id(),
-        YBTableName(table_info.namespace_().id(), table_info.namespace_().name(),
-                    table_info.id(), table_info.name()));
+        YBTableName(master::GetDatabaseTypeForTable(table_info.table_type()),
+                    table_info.namespace_().id(),
+                    table_info.namespace_().name(),
+                    table_info.id(),
+                    table_info.name()));
   }
   return Status::OK();
 }

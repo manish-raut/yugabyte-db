@@ -95,7 +95,7 @@ class RpcStubTest : public RpcTestBase {
   void SetUp() override {
     RpcTestBase::SetUp();
     StartTestServerWithGeneratedCode(&server_hostport_);
-    client_messenger_ = CreateMessenger("Client");
+    client_messenger_ = CreateAutoShutdownMessengerHolder("Client");
     proxy_cache_ = std::make_unique<ProxyCache>(client_messenger_.get());
   }
 
@@ -114,12 +114,12 @@ class RpcStubTest : public RpcTestBase {
 
   template <class T>
   struct ProxyWithMessenger {
-    std::unique_ptr<Messenger> messenger;
+    AutoShutdownMessengerHolder messenger;
     std::unique_ptr<T> proxy;
   };
 
   ProxyWithMessenger<CalculatorServiceProxy> CreateCalculatorProxyHolder(const Endpoint& remote) {
-    std::unique_ptr<Messenger> messenger = CreateMessenger("Client");
+    auto messenger = CreateAutoShutdownMessengerHolder("Client");
     IpAddress local_address = remote.address().is_v6()
         ? IpAddress(boost::asio::ip::address_v6::loopback())
         : IpAddress(boost::asio::ip::address_v4::loopback());
@@ -130,14 +130,12 @@ class RpcStubTest : public RpcTestBase {
     EXPECT_OK(messenger->StartAcceptor());
     EXPECT_FALSE(messenger->io_service().stopped());
     ProxyCache proxy_cache(messenger.get());
-    return ProxyWithMessenger<CalculatorServiceProxy>{
-      std::move(messenger),
-      std::make_unique<CalculatorServiceProxy>(&proxy_cache, HostPort(remote))
-    };
+    return { move(messenger),
+        std::make_unique<CalculatorServiceProxy>(&proxy_cache, HostPort(remote)) };
   }
 
   HostPort server_hostport_;
-  std::unique_ptr<Messenger> client_messenger_;
+  AutoShutdownMessengerHolder client_messenger_;
   std::unique_ptr<ProxyCache> proxy_cache_;
 };
 
@@ -551,7 +549,7 @@ TEST_F(RpcStubTest, TestDumpCallsInFlight) {
   ASSERT_EQ(1, dump_resp.outbound_connections(0).calls_in_flight_size());
   ASSERT_EQ("Sleep", dump_resp.outbound_connections(0).calls_in_flight(0).
                         header().remote_method().method_name());
-  ASSERT_GT(dump_resp.outbound_connections(0).calls_in_flight(0).micros_elapsed(), 0);
+  ASSERT_GT(dump_resp.outbound_connections(0).calls_in_flight(0).elapsed_millis(), 0);
 
   // And the server messenger.
   // We have to loop this until we find a result since the actual call is sent
@@ -571,7 +569,7 @@ TEST_F(RpcStubTest, TestDumpCallsInFlight) {
   ASSERT_EQ(1, dump_resp.inbound_connections(0).calls_in_flight_size());
   ASSERT_EQ("Sleep", dump_resp.inbound_connections(0).calls_in_flight(0).
                         header().remote_method().method_name());
-  ASSERT_GT(dump_resp.inbound_connections(0).calls_in_flight(0).micros_elapsed(), 0);
+  ASSERT_GT(dump_resp.inbound_connections(0).calls_in_flight(0).elapsed_millis(), 0);
   ASSERT_STR_CONTAINS(dump_resp.inbound_connections(0).calls_in_flight(0).trace_buffer(),
                       "Inserting onto call queue");
   latch.Wait();
@@ -657,24 +655,18 @@ class PingTestHelper {
     call.reply_time = MonoTime::Now();
     call.controller.Reset();
     LaunchNext();
-    if (++done_calls_ == calls_.size()) {
+    auto calls_size = calls_.size();
+    if (++done_calls_ == calls_size) {
       LOG(INFO) << "Calls done";
       std::unique_lock<std::mutex> lock(mutex_);
-      cond_.notify_one();
       finished_ = true;
+      cond_.notify_one();
     }
   }
 
   void Wait() {
-    {
-      std::unique_lock<std::mutex> lock(mutex_);
-      while (done_calls_ < calls_.size()) {
-        cond_.wait(lock);
-      }
-    }
-    while (!finished_) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+    std::unique_lock<std::mutex> lock(mutex_);
+    cond_.wait(lock, [this] { return finished_; });
   }
 
   const std::vector<PingCall>& calls() const {
@@ -688,7 +680,7 @@ class PingTestHelper {
   std::vector<PingCall> calls_;
   std::mutex mutex_;
   std::condition_variable cond_;
-  std::atomic<bool> finished_ = {false};
+  bool finished_ = false;
 };
 
 DEFINE_uint64(test_rpc_concurrency, 20, "Number of concurrent RPC requests");
@@ -700,7 +692,7 @@ TEST_F(RpcStubTest, TestRpcPerformance) {
   MessengerOptions messenger_options = kDefaultClientMessengerOptions;
   messenger_options.n_reactors = 4;
   proxy_cache_.reset();
-  client_messenger_ = CreateMessenger("Client", messenger_options);
+  client_messenger_ = CreateAutoShutdownMessengerHolder("Client", messenger_options);
   proxy_cache_ = std::make_unique<ProxyCache>(client_messenger_.get());
   CalculatorServiceProxy p(proxy_cache_.get(), server_hostport_);
 

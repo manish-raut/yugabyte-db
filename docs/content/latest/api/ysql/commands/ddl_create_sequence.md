@@ -109,8 +109,8 @@ CREATE TABLE t(k integer NOT NULL DEFAULT nextval('t_k_seq'));
 
 Create a simple sequence that increments by 1 every time `nextval()` is called.
 
-```sql
-postgres=# CREATE SEQUENCE s;
+```postgresql
+yugabyte=# CREATE SEQUENCE s;
 ```
 
 ```
@@ -119,8 +119,8 @@ CREATE SEQUENCE
 
 Call `nextval()`.
 
-```sql
-postgres=# SELECT nextval('s');
+```postgresql
+yugabyte=# SELECT nextval('s');
 ```
 
 ```
@@ -132,8 +132,8 @@ postgres=# SELECT nextval('s');
 
 Create a sequence with a cache of 10,000 values.
 
-```sql
-postgres=# CREATE SEQUENCE s2 CACHE 10000;
+```postgresql
+yugabyte=# CREATE SEQUENCE s2 CACHE 10000;
 ```
 
 ```
@@ -142,7 +142,7 @@ CREATE SEQUENCE
 
 In the same session, select `nextval()`.
 
-```sql
+```postgresql
 SELECT nextval('s2');
 ```
 
@@ -155,7 +155,7 @@ SELECT nextval('s2');
 
 In a different session, select `nextval()`.
 
-```sql
+```postgresql
 SELECT nextval('s2');
 ```
 
@@ -168,7 +168,7 @@ nextval
 
 Create a sequence that starts at 0. MINVALUE also has to be changed from its default 1 to something less than or equal to 0.
 
-```sql
+```postgresql
 CREATE SEQUENCE s3 START 0 MINVALUE 0;
 ```
 
@@ -176,7 +176,7 @@ CREATE SEQUENCE s3 START 0 MINVALUE 0;
 CREATE SEQUENCE
 ```
 
-```sql
+```postgresql
 SELECT nextval('s3');
 ```
 

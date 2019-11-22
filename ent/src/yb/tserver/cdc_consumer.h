@@ -15,8 +15,9 @@
 #define ENT_SRC_YB_TSERVER_CDC_CONSUMER_H
 
 #include <unordered_map>
+#include <unordered_set>
 
-#include "yb/cdc/cdc_consumer_util.h"
+#include "yb/cdc/cdc_util.h"
 #include "yb/util/locks.h"
 
 namespace yb {
@@ -27,12 +28,12 @@ class ThreadPool;
 namespace rpc {
 
 class ProxyCache;
+class Rpcs;
 
 } // namespace rpc
 
 namespace cdc {
 
-class CDCConsumerProxyManager;
 class ConsumerRegistryPB;
 
 } // namespace cdc
@@ -59,17 +60,26 @@ class CDCConsumer {
   CDCConsumer(std::function<bool(const std::string&)> is_leader_for_tablet,
       rpc::ProxyCache* proxy_cache,
       const std::string& ts_uuid,
-      std::unique_ptr<client::YBClient> client);
+      std::unique_ptr<client::YBClient> local_client);
 
   ~CDCConsumer();
   void Shutdown();
 
   // Refreshes the in memory state when we receive a new registry from master.
-  void RefreshWithNewRegistryFromMaster(const cdc::ConsumerRegistryPB& consumer_registry);
+  void RefreshWithNewRegistryFromMaster(const cdc::ConsumerRegistryPB* consumer_registry,
+                                        int32_t cluster_config_version);
 
   std::vector<std::string> TEST_producer_tablets_running();
 
   std::string LogPrefix();
+
+  // Return the value stored in cluster_config_version_. Since we are reading an atomic variable,
+  // we don't need to hold the mutex.
+  int32_t cluster_config_version() const NO_THREAD_SAFETY_ANALYSIS;
+
+  std::shared_ptr<rpc::Rpcs> rpcs() {
+    return rpcs_;
+  }
 
  private:
   // Runs a thread that periodically polls for any new threads.
@@ -77,31 +87,33 @@ class CDCConsumer {
 
   // Loops through all the entries in the registry and creates a producer -> consumer tablet
   // mapping.
-  void UpdateInMemoryState(const cdc::ConsumerRegistryPB& consumer_producer_map);
+  void UpdateInMemoryState(const cdc::ConsumerRegistryPB* consumer_producer_map,
+                           int32_t cluster_config_version);
 
   // Loops through all entries in registry from master to check if all producer tablets are being
   // polled for.
   void TriggerPollForNewTablets();
 
-  bool ShouldContinuePolling(const cdc::ProducerTabletInfo& producer_tablet_info);
+  bool ShouldContinuePolling(const cdc::ProducerTabletInfo producer_tablet_info);
 
-  void RemoveFromPollersMap(const cdc::ProducerTabletInfo& producer_tablet_info);
-
-  // Mutex for producer_consumer_tablet_map_from_master_.
-  rw_spinlock master_data_mutex_;
-
-  // Mutex for producer_pollers_map_.
-  rw_spinlock producer_pollers_map_mutex_;
+  void RemoveFromPollersMap(const cdc::ProducerTabletInfo producer_tablet_info);
 
   // Mutex and cond for should_run_ state.
   std::mutex should_run_mutex_;
   std::condition_variable cond_;
 
+  // Mutex for producer_consumer_tablet_map_from_master_.
+  rw_spinlock master_data_mutex_ ACQUIRED_AFTER(should_run_mutex_);
+
+  // Mutex for producer_pollers_map_.
+  rw_spinlock producer_pollers_map_mutex_ ACQUIRED_AFTER(should_run_mutex_, master_data_mutex_);
+
   std::function<bool(const std::string&)> is_leader_for_tablet_;
-  std::unique_ptr<cdc::CDCConsumerProxyManager> proxy_manager_;
 
   std::unordered_map<cdc::ProducerTabletInfo, cdc::ConsumerTabletInfo,
                      cdc::ProducerTabletInfo::Hash> producer_consumer_tablet_map_from_master_;
+
+  std::unordered_set<std::string> streams_with_same_num_producer_consumer_tablets_;
 
   scoped_refptr<Thread> run_trigger_poll_thread_;
 
@@ -111,10 +123,19 @@ class CDCConsumer {
   std::unique_ptr<ThreadPool> thread_pool_;
 
   std::string log_prefix_;
-  std::shared_ptr<client::YBClient> client_;
+  std::shared_ptr<client::YBClient> local_client_;
+
+  // map: {universe_uuid : ...}.
+  std::unordered_map<std::string, std::shared_ptr<client::YBClient>> remote_clients_
+    GUARDED_BY(producer_pollers_map_mutex_);
+  std::unordered_map<std::string, std::string> uuid_master_addrs_
+    GUARDED_BY(master_data_mutex_);
 
   bool should_run_ = true;
 
+  std::atomic<int32_t> cluster_config_version_ GUARDED_BY(master_data_mutex_) = {-1};
+
+  std::shared_ptr<rpc::Rpcs> rpcs_ = std::make_shared<rpc::Rpcs>();
 };
 
 } // namespace enterprise

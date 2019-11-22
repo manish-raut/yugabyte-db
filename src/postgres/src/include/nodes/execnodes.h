@@ -579,7 +579,10 @@ typedef struct EState
 	struct JitContext *es_jit;
 	struct JitInstrumentation *es_jit_worker_instr;
 
-	/* YugaByte-specific fields */
+	/*
+	 * YugaByte-specific fields
+	 */
+
 	bool es_yb_is_single_row_modify_txn; /* Is this query a single-row modify
 																				* and the only stmt in this txn. */
 	TupleTableSlot *yb_conflict_slot; /* If a conflict is to be resolved when inserting data,
@@ -1666,6 +1669,9 @@ typedef struct ForeignScanState
 	/* use struct pointer to avoid including fdwapi.h here */
 	struct FdwRoutine *fdwroutine;
 	void	   *fdw_state;		/* foreign-data wrapper can keep state here */
+
+	/* YB specific attributes. */
+	List	   *yb_fdw_aggs;	/* aggregate pushdown information */
 } ForeignScanState;
 
 /* ----------------
@@ -1960,6 +1966,9 @@ typedef struct AggState
 	AggStatePerGroup *all_pergroups;	/* array of first ->pergroups, than
 										 * ->hash_pergroup */
 	ProjectionInfo *combinedproj;	/* projection machinery */
+
+	/* YB specific attributes. */
+	bool		yb_pushdown_supported;	/* YB pushdown supported for agg */
 } AggState;
 
 /* ----------------

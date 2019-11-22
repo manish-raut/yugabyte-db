@@ -42,8 +42,8 @@ class YQLVirtualTable : public common::YQLStorageIf {
 
   // Retrieves all the data for the yql virtual table in form of a QLRowBlock. This data is then
   // used by the iterator.
-  virtual CHECKED_STATUS RetrieveData(const QLReadRequestPB& request,
-                                      std::unique_ptr<QLRowBlock>* vtable) const = 0;
+  virtual Result<std::shared_ptr<QLRowBlock>> RetrieveData(
+      const QLReadRequestPB& request) const = 0;
 
   CHECKED_STATUS GetIterator(const QLReadRequestPB& request,
                              const Schema& projection,
@@ -88,7 +88,7 @@ class YQLVirtualTable : public common::YQLStorageIf {
       return STATUS_SUBSTITUTE(NotFound, "Couldn't find column $0 in schema", col_name);
     }
     const DataType data_type = schema_.column(column_index).type_info()->type();
-    *(row->mutable_column(column_index)) = util::GetValue(value, data_type);
+    row->SetColumn(column_index, util::GetValue(value, data_type));
     return Status::OK();
   }
 

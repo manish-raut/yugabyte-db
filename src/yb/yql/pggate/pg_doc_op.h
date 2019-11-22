@@ -147,6 +147,9 @@ class PgDocReadOp : public PgDocOp {
   // Analyze options and pick the appropriate prefetch limit.
   void SetRequestPrefetchLimit();
 
+  // Set the row_mark_type field of our read request based on our exec control parameter.
+  void SetRowMark();
+
   // Operator.
   std::shared_ptr<client::YBPgsqlReadOp> read_op_;
 };

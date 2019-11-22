@@ -11,7 +11,7 @@ isTocNested: true
 showAsideToc: true
 ---
 
-If you like sports statistics, you can install the PostgreSQL-compatible version of SportsDB on the Yugabyte DB distributed SQL database and explore statistics for your favorite sport.
+If you like sports statistics, you can install the PostgreSQL-compatible version of SportsDB on the YugabyteDB distributed SQL database and explore statistics for your favorite sport.
 
 ## About the SportsDB sample database
 
@@ -27,11 +27,11 @@ Follow the steps here to download and install the SportsDB sample database.
 
 ### Before you begin
 
-To use the SportsDB sample database, you must have installed and configured Yugabyte DB. To get up and running quickly, see [Quick Start](/latest/quick-start/).
+To use the SportsDB sample database, you must have installed and configured YugabyteDB. To get up and running quickly, see [Quick Start](/latest/quick-start/).
 
 ### 1. Download the SportsDB scripts
 
-The SQL scripts that you need to create the SportsDB sample database (Yugabyte DB-compatible) are available in the [`sample` directory of the Yugabyte DB GitHub repository](https://github.com/yugabyte/yugabyte-db/tree/master/sample). Download the following five files.
+The SQL scripts that you need to create the SportsDB sample database (YugabyteDB-compatible) are available in the [`sample` directory of the YugabyteDB GitHub repository](https://github.com/yugabyte/yugabyte-db/tree/master/sample). Download the following five files.
 
 - [`sportsdb_tables.sql`](https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_tables.sql) — Creates the tables and sequences
 - [`sportsdb_inserts.sql`](https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/sample/sportsdb_inserts.sql) — Loads the sample data into the `sportsdb` database
@@ -41,26 +41,29 @@ The SQL scripts that you need to create the SportsDB sample database (Yugabyte D
 
 ### 2. Open the YSQL shell
 
-To open the Yugabyte SQL (YSQL) shell, run the `ysqlsh` command.
+To open the Yugabyte SQL (YSQL) shell, run the `ysqlsh` command from the YugabyteDB root directory.
 
 ```sh
+$ ./bin/ysqlsh
+
+```
 ysqlsh (11.2)
 Type "help" for help.
-postgres=#
+yugabyte=#
 ```
 
 ### 3. Create the SportsDB database
 
 To create the `sportsdb` database, run the following YSQL command
 
-```sql
+```postgresql
 CREATE DATABASE sportsdb;
 ```
 
 Confirm that you have the `sportsdb` database by listing out the databases on your cluster.
 
 ```
-postgres=# \l
+yugabyte=# \l
 ```
 
 [Add screenshot.]
@@ -68,8 +71,8 @@ postgres=# \l
 Connect to the `sportsdb` database.
 
 ```
-postgres=# \c sportsdb
-You are now connected to database "sportsdb" as user "postgres".
+yugabyte=# \c sportsdb
+You are now connected to database "sportsdb" as user "yugabyte".
 sportsdb=#
 ```
 
@@ -78,7 +81,7 @@ sportsdb=#
 To build the tables and database objects, run the following command.
 
 ```
-sportsdb=# \i /Users/yugabyte/sportsdb_tables.sql
+sportsdb=# \i share/sportsdb_tables.sql
 ```
 
 You can verify that all 203 tables and sequences have been created by running the `\d` command.
@@ -92,7 +95,7 @@ sportsdb=# \d
 To load the `sportsdb` database with sample data (~80k rows), run the following command to execute commands in the file.
 
 ```
-sportsdb=# \i /Users/yugabyte/sportsdb_data.sql
+sportsdb=# \i share/sportsdb_inserts.sql
 ```
 
 To verify that you have some data to work with, you can run the following simple SELECT statement to pull data from the  basketball_defensive_stats` table.
@@ -106,13 +109,13 @@ sportsdb=# SELECT * FROM basketball_defensive_stats WHERE steals_total = '5';
 To create the unique constraints and foreign keys, run the following commands.
 
 ```
-sportsdb=# \i /Users/yugabyte/sportsdb_constraints.sql
+sportsdb=# \i share/sportsdb_constraints.sql
 ```
 
 and
 
 ```
-sportsdb=# \i /Users/yugabyte/sportsdb_fks.sql
+sportsdb=# \i share/sportsdb_fks.sql
 ```
 
 ### 7. Create the indexes
@@ -120,9 +123,9 @@ sportsdb=# \i /Users/yugabyte/sportsdb_fks.sql
 To create the indexes, run the following command.
 
 ```
-sportsdb=# \i /Users/yugabyte/sportsdb_indexes.sql
+sportsdb=# \i share/sportsdb_indexes.sql
 ```
 
 ## Explore the SportsDB database
 
-That’s it! Using the command line or your favorite PostgreSQL development or administration tool, you are now ready to start exploring the SportsDB database and Yugabyte DB features.
+That’s it! Using the command line or your favorite PostgreSQL development or administration tool, you are now ready to start exploring the SportsDB database and YugabyteDB features.

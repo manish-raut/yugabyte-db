@@ -37,10 +37,15 @@
 #include <string>
 #include <vector>
 
+#include "yb/client/transaction.h"
+#include "yb/client/transaction_pool.h"
+
+#include "yb/common/ql_value.h"
+#include "yb/common/row_mark.h"
 #include "yb/common/schema.h"
 #include "yb/common/wire_protocol.h"
-#include "yb/consensus/consensus.h"
 #include "yb/consensus/leader_lease.h"
+#include "yb/consensus/raft_consensus.h"
 
 #include "yb/docdb/cql_operation.h"
 #include "yb/docdb/doc_rowwise_iterator.h"
@@ -71,9 +76,11 @@
 #include "yb/tserver/tserver.pb.h"
 
 #include "yb/util/crc.h"
+#include "yb/util/debug/long_operation_tracker.h"
 #include "yb/util/debug/trace_event.h"
 #include "yb/util/faststring.h"
 #include "yb/util/flag_tags.h"
+#include "yb/util/math_util.h"
 #include "yb/util/mem_tracker.h"
 #include "yb/util/monotime.h"
 #include "yb/util/random_util.h"
@@ -131,6 +138,26 @@ DEFINE_int32(max_stale_read_bound_time_ms, 0, "If we are allowed to read from fo
              "when was the last time it received a message from the leader.");
 TAG_FLAG(max_stale_read_bound_time_ms, evolving);
 TAG_FLAG(max_stale_read_bound_time_ms, runtime);
+
+DEFINE_uint64(sst_files_soft_limit, 24,
+              "When majority SST files number is greater that this limit, we will start rejecting "
+              "part of write requests. The higher the number of SST files, the higher probability "
+              "of rejection.");
+TAG_FLAG(sst_files_soft_limit, runtime);
+
+DEFINE_uint64(sst_files_hard_limit, 48,
+              "When majority SST files number is greater that this limit, we will reject all write "
+              "requests.");
+TAG_FLAG(sst_files_hard_limit, runtime);
+
+DEFINE_uint64(min_rejection_delay_ms, 100, ".");
+TAG_FLAG(min_rejection_delay_ms, runtime);
+
+DEFINE_uint64(max_rejection_delay_ms, 5000, ".");
+TAG_FLAG(max_rejection_delay_ms, runtime);
+
+DEFINE_test_flag(int32, TEST_write_rejection_percentage, 0,
+                 "Reject specified percentage of writes.");
 
 DEFINE_test_flag(bool, assert_reads_from_follower_rejected_because_of_staleness, false,
                  "If set, we verify that the consistency level is CONSISTENT_PREFIX, and that "
@@ -221,13 +248,34 @@ Status GetTabletRef(const TabletPeerPtr& tablet_peer,
   return Status::OK();
 }
 
+// overlimit - we have 2 bounds, value and random score.
+// overlimit is calculated as:
+// score + (value - lower_bound) / (upper_bound - lower_bound).
+// And it will be >= 1.0 when this function is invoked.
+template<class Resp>
+bool RejectWrite(tablet::TabletPeer* tablet_peer, const std::string& message, double overlimit,
+                 Resp* resp, rpc::RpcContext* context) {
+  int64_t delay_ms = fit_bounds<int64_t>((overlimit - 1.0) * FLAGS_max_rejection_delay_ms,
+                                         FLAGS_min_rejection_delay_ms,
+                                         FLAGS_max_rejection_delay_ms);
+  auto status = STATUS(ServiceUnavailable, message, TabletServerDelay(delay_ms * 1ms));
+  YB_LOG_EVERY_N_SECS(WARNING, 1)
+      << "T " << tablet_peer->tablet_id() << " P " << tablet_peer->permanent_uuid()
+      << ": Rejecting Write request, " << status << THROTTLE_MSG;
+  SetupErrorAndRespond(resp->mutable_error(), status,
+                       TabletServerErrorPB::UNKNOWN_ERROR,
+                       context);
+  return false;
+}
+
 } // namespace
 
 template<class Resp>
-bool TabletServiceImpl::CheckMemoryPressureOrRespond(
-    double score, tablet::Tablet* tablet, Resp* resp, rpc::RpcContext* context) {
+bool TabletServiceImpl::CheckWriteThrottlingOrRespond(
+    double score, tablet::TabletPeer* tablet_peer, Resp* resp, rpc::RpcContext* context) {
   // Check for memory pressure; don't bother doing any additional work if we've
   // exceeded the limit.
+  auto tablet = tablet_peer->tablet();
   auto soft_limit_exceeded_result = tablet->mem_tracker()->AnySoftLimitExceeded(score);
   if (soft_limit_exceeded_result.exceeded) {
     tablet->metrics()->leader_memory_pressure_rejections->Increment();
@@ -244,6 +292,31 @@ bool TabletServiceImpl::CheckMemoryPressureOrRespond(
                          TabletServerErrorPB::UNKNOWN_ERROR,
                          context);
     return false;
+  }
+
+  const uint64_t num_sst_files = tablet_peer->raft_consensus()->MajorityNumSSTFiles();
+  const auto sst_files_soft_limit = FLAGS_sst_files_soft_limit;
+  const int64_t sst_files_used_delta = num_sst_files - sst_files_soft_limit;
+  if (sst_files_used_delta > 0) {
+    const auto sst_files_hard_limit = FLAGS_sst_files_hard_limit;
+    const auto sst_files_full_delta = sst_files_hard_limit - sst_files_soft_limit;
+    if (sst_files_used_delta > sst_files_full_delta * (1 - score)) {
+      tablet->metrics()->majority_sst_files_rejections->Increment();
+      auto message = Format("SST files limit exceeded $0 against ($1, $2), score: $3",
+                            num_sst_files, sst_files_soft_limit, sst_files_hard_limit, score);
+      auto overlimit = sst_files_full_delta > 0
+          ? score + static_cast<double>(sst_files_used_delta) / sst_files_full_delta
+          : 2.0;
+      return RejectWrite(tablet_peer, message, overlimit, resp, context);
+    }
+  }
+
+  if (FLAGS_TEST_write_rejection_percentage != 0 &&
+      score >= 1.0 - FLAGS_TEST_write_rejection_percentage * 0.01) {
+    auto status = Format("TEST: Write request rejected, desired percentage: $0, score: $1",
+                         FLAGS_TEST_write_rejection_percentage, score);
+    return RejectWrite(tablet_peer, status, score + FLAGS_TEST_write_rejection_percentage * 0.01,
+                       resp, context);
   }
 
   return true;
@@ -768,8 +841,8 @@ void TabletServiceImpl::Write(const WriteRequestPB* req,
   auto tablet = LookupLeaderTabletOrRespond(
       server_->tablet_peer_lookup(), req->tablet_id(), resp, &context);
   if (!tablet ||
-      !CheckMemoryPressureOrRespond(
-          req->memory_limit_score(), tablet.peer->tablet(), resp, &context)) {
+      !CheckWriteThrottlingOrRespond(
+          req->rejection_score(), tablet.peer.get(), resp, &context)) {
     return;
   }
 
@@ -784,7 +857,9 @@ void TabletServiceImpl::Write(const WriteRequestPB* req,
           auto key = entry.column_new_values(0).expr().value().int32_value();
           LOG(INFO) << txn_id << " UPDATE: " << key << " = "
                     << entry.column_new_values(1).expr().value().string_value();
-        } else if (entry.stmt_type() == PgsqlWriteRequestPB::PGSQL_INSERT) {
+        } else if (
+            entry.stmt_type() == PgsqlWriteRequestPB::PGSQL_INSERT ||
+            entry.stmt_type() == PgsqlWriteRequestPB::PGSQL_UPSERT) {
           docdb::DocKey doc_key;
           CHECK_OK(doc_key.FullyDecodeFrom(entry.ybctid_column_value().value().binary_value()));
           LOG(INFO) << txn_id << " INSERT: " << doc_key.hashed_group()[0].GetInt32() << " = "
@@ -1119,6 +1194,8 @@ void TabletServiceImpl::Read(const ReadRequestPB* req,
   // serialization anomaly tested by TestOneOrTwoAdmins
   // (https://github.com/YugaByte/yugabyte-db/issues/1572).
 
+  LongOperationTracker long_operation_tracker("Read", 1s);
+
   bool serializable_isolation = false;
   TabletPeerPtr tablet_peer;
   if (req->has_transaction()) {
@@ -1148,10 +1225,38 @@ void TabletServiceImpl::Read(const ReadRequestPB* req,
 #endif
   }
 
+  // Get the most restrictive row mark present in the batch of PostgreSQL requests.
+  // TODO: rather handle individual row marks once we start batching read requests (issue #2495)
+  RowMarkType batch_row_mark = RowMarkType::ROW_MARK_ABSENT;
+  if (!req->pgsql_batch().empty()) {
+    for (const auto& pg_req : req->pgsql_batch()) {
+      // For postgres requests check that the syscatalog version matches.
+      if (pg_req.has_ysql_catalog_version() &&
+          pg_req.ysql_catalog_version() < server_->ysql_catalog_version()) {
+        SetupErrorAndRespond(resp->mutable_error(),
+            STATUS_SUBSTITUTE(QLError, "Catalog Version Mismatch: A DDL occurred while processing "
+                                       "this query. Try Again."),
+            TabletServerErrorPB::MISMATCHED_SCHEMA, &context);
+        return;
+      }
+      RowMarkType current_row_mark = GetRowMarkTypeFromPB(pg_req);
+      if (IsValidRowMarkType(current_row_mark)) {
+        if (!req->has_transaction()) {
+          SetupErrorAndRespond(resp->mutable_error(),
+              STATUS(NotSupported,
+                     "Read request with row mark types must be part of a transaction"),
+              TabletServerErrorPB::OPERATION_NOT_SUPPORTED, &context);
+        }
+        batch_row_mark = GetStrongestRowMarkType({current_row_mark, batch_row_mark});
+      }
+    }
+  }
+  const bool has_row_mark = IsValidRowMarkType(batch_row_mark);
+
   LeaderTabletPeer leader_peer;
   ReadContext read_context = {req, resp, &context};
 
-  if (serializable_isolation) {
+  if (serializable_isolation || has_row_mark) {
     // At this point we expect that we don't have pure read serializable transactions, and
     // always write read intents to detect conflicts with other writes.
     leader_peer = LookupLeaderTabletOrRespond(
@@ -1159,8 +1264,8 @@ void TabletServiceImpl::Read(const ReadRequestPB* req,
     // Serializable read adds intents, i.e. writes data.
     // We should check for memory pressure in this case.
     if (!leader_peer ||
-        !CheckMemoryPressureOrRespond(
-            req->memory_limit_score(), leader_peer.peer->tablet(), resp, &context)) {
+        !CheckWriteThrottlingOrRespond(
+            req->rejection_score(), leader_peer.peer.get(), resp, &context)) {
       return;
     }
     read_context.tablet = leader_peer.peer->shared_tablet();
@@ -1185,7 +1290,9 @@ void TabletServiceImpl::Read(const ReadRequestPB* req,
   // safe_ht_to_read is used only for read restart, so if read_time is valid, then we would respond
   // with "restart required".
   ReadHybridTime& read_time = read_context.read_time;
+
   read_time = ReadHybridTime::FromReadTimePB(*req);
+
   read_context.allow_retry = !read_time;
   read_context.require_lease = tablet::RequireLease(
       req->consistency_level() == YBConsistencyLevel::STRONG);
@@ -1204,20 +1311,6 @@ void TabletServiceImpl::Read(const ReadRequestPB* req,
     }
   }
 
-  // For postgres requests check that the syscatalog version matches.
-  if (!req->pgsql_batch().empty()) {
-    for (const auto& pg_req : req->pgsql_batch()) {
-      if (pg_req.has_ysql_catalog_version() &&
-          pg_req.ysql_catalog_version() < server_->ysql_catalog_version()) {
-        SetupErrorAndRespond(resp->mutable_error(),
-            STATUS_SUBSTITUTE(QLError, "Catalog Version Mismatch: A DDL occurred while processing "
-                                       "this query. Try Again."),
-            TabletServerErrorPB::MISMATCHED_SCHEMA, &context);
-        return;
-      }
-    }
-  }
-
   if (transactional) {
     // Serial number is used for check whether this operation was initiated before
     // transaction status request. So we should initialize it as soon as possible.
@@ -1232,11 +1325,15 @@ void TabletServiceImpl::Read(const ReadRequestPB* req,
   host_port_pb.set_port(remote_address.port());
   read_context.host_port_pb = &host_port_pb;
 
-  if (serializable_isolation) {
+  if (serializable_isolation || has_row_mark) {
     WriteRequestPB write_req;
     *write_req.mutable_write_batch()->mutable_transaction() = req->transaction();
+    if (has_row_mark) {
+      write_req.mutable_write_batch()->set_row_mark_type(batch_row_mark);
+      read_context.read_time.ToPB(write_req.mutable_read_time());
+    }
     write_req.set_tablet_id(req->tablet_id());
-    write_req.mutable_write_batch()->set_may_have_metadata(req->may_have_metadata());
+    write_req.mutable_write_batch()->set_deprecated_may_have_metadata(true);
     // TODO(dtxn) write request id
 
     auto* write_batch = write_req.mutable_write_batch();
@@ -1473,7 +1570,7 @@ Result<ReadHybridTime> TabletServiceImpl::DoRead(ReadContext* read_context) {
     return STATUS(NotSupported, "Transaction status table does not support read");
   }
 
-  return Status::OK();
+  return ReadHybridTime();
 }
 
 ConsensusServiceImpl::ConsensusServiceImpl(const scoped_refptr<MetricEntity>& metric_entity,
@@ -1514,6 +1611,11 @@ void ConsensusServiceImpl::UpdateConsensus(const ConsensusRequestPB* req,
                          TabletServerErrorPB::UNKNOWN_ERROR,
                          &context);
     return;
+  }
+
+  auto tablet = tablet_peer->shared_tablet();
+  if (tablet) {
+    resp->set_num_sst_files(tablet->GetCurrentVersionNumSSTFiles());
   }
   context.RespondSuccess();
 }
@@ -1817,6 +1919,13 @@ void TabletServiceImpl::ListTabletsForTabletServer(const ListTabletsForTabletSer
     std::shared_ptr<consensus::Consensus> consensus = peer->shared_consensus();
     data_entry->set_is_leader(consensus && consensus->role() == consensus::RaftPeerPB::LEADER);
     data_entry->set_state(status.state());
+
+    auto tablet = peer->shared_tablet();
+    uint64_t num_sst_files = (tablet) ? tablet->GetCurrentVersionNumSSTFiles() : 0;
+    data_entry->set_num_sst_files(num_sst_files);
+
+    uint64_t num_log_segments = peer->GetNumLogSegments();
+    data_entry->set_num_log_segments(num_log_segments);
   }
 
   context.RespondSuccess();
@@ -1907,6 +2016,21 @@ void TabletServiceImpl::IsTabletServerReady(const IsTabletServerReadyRequestPB* 
   context.RespondSuccess();
 }
 
+void TabletServiceImpl::TakeTransaction(const TakeTransactionRequestPB* req,
+                                        TakeTransactionResponsePB* resp,
+                                        rpc::RpcContext context) {
+  auto transaction = server_->TransactionPool()->Take();
+  auto metadata = transaction->Release();
+  if (!metadata.ok()) {
+    LOG(INFO) << "Take failed: " << metadata.status();
+    context.RespondFailure(metadata.status());
+    return;
+  }
+  metadata->ForceToPB(resp->mutable_metadata());
+  VLOG(2) << "Taken metadata: " << metadata->ToString();
+  context.RespondSuccess();
+}
+
 void TabletServiceImpl::Shutdown() {
 }
 
@@ -1920,7 +2044,6 @@ scoped_refptr<Histogram> TabletServer::GetMetricsHistogram(
   }
   return nullptr;
 }
-
 
 }  // namespace tserver
 }  // namespace yb

@@ -12,16 +12,15 @@ menu:
     weight: 2460
 isTocNested: true
 showAsideToc: true
-
 ---
 
 ## Overview
 
-`cqlsh` is a command line interface (CLI), or shell, for interacting with Yugabyte DB through [YCQL](../../api/ycql/).
+The YugabyteDB CQL shell (`cqlsh`) provides a command line interface (CLI) for interacting with YugabyteDB using [YCQL](../../api/ycql/).
 
 ## Download
 
-cqlsh is installed as part of Yugabyte DB and is located in the `bin` directory of Yugabyte home. It is also available for download and install from Yugabyte DB's [GitHub repo](https://github.com/yugabyte/cqlsh/releases).
+The `cqlsh` shell is installed as part of YugabyteDB and is located in the `bin` directory of YugabyteDB home. It is also available for download and install from YugabyteDB's [GitHub repository](https://github.com/yugabyte/cqlsh/releases).
 
 ## Example
 
@@ -33,9 +32,11 @@ $ ./bin/cqlsh --execute "select cluster_name, data_center, rack from system.loca
  local cluster | datacenter1 | rack1
 ```
 
-## Command line options
+## Online help
 
-Use the **-\-help** option to see all the command line options supported.
+Run `cqlsh --help` to display the online help.
+
+## Syntax
 
 ```sh
 cqlsh [options] [host [port]]
@@ -51,9 +52,9 @@ Where
 | `--color`           | `-C`       |         | Force color output                                           |
 | `--no-color`        |            |         | Disable color output                                         |
 | `--browser`         |            |         | Specify the browser to use for displaying `cqlsh` help. This can be one of the [supported browser names](https://docs.python.org/2/library/webbrowser.html) (e.g. firefox) or a browser path followed by `%s` (e.g. `/usr/bin/google-chrome-stable %s`). |
-| `--ssl`             |            |         | Use SSL when connecting to Yugabyte DB                       |
-| `--user`            | `-u`       |         | Username to authenticate against Yugabyte DB with            |
-| `--password`        | `-p`       |         | Password to authenticate against Yugabyte DB with, should be used in conjunction with `--user` |
+| `--ssl`             |            |         | Use SSL when connecting to YugabyteDB                       |
+| `--user`            | `-u`       |         | Username to authenticate against YugabyteDB with            |
+| `--password`        | `-p`       |         | Password to authenticate against YugabyteDB with, should be used in conjunction with `--user` |
 | `--keyspace`        | `-k`       |         | Keyspace to authenticate to, should be used in conjunction with `--user` |
 | `--file`            | `-f`       |         | Execute commands from the given file, then exit              |
 | `--debug`           |            |         | Print additional debugging information                       |
@@ -97,7 +98,7 @@ cqlsh> SHOW VERSION
 
 ### SHOW HOST
 
-Prints the IP address and port of the YB-TServer node that `cqlsh` is connected to in addition to the cluster name. Example:
+Prints the IP address and port of the YB-TServer service that `cqlsh` is connected to in addition to the cluster name. Example:
 
 ```sql
 cqlsh> SHOW HOST
@@ -174,7 +175,7 @@ To inspect the current expand setting, use `EXPAND` with no arguments.
 
 ### LOGIN
 
-Authenticate as a specified Yugabyte DB user for the current session.
+Authenticate as a specified YugabyteDB user for the current session.
 
 ```sql
 LOGIN <username> [<password>]

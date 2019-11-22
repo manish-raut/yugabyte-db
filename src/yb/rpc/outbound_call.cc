@@ -525,8 +525,8 @@ bool OutboundCall::IsFinished() const {
   return FinishedState(state_.load(std::memory_order_acquire));
 }
 
-Status OutboundCall::GetSidecar(int idx, Slice* sidecar) const {
-  return call_response_.GetSidecar(idx, sidecar);
+Result<Slice> OutboundCall::GetSidecar(int idx) const {
+  return call_response_.GetSidecar(idx);
 }
 
 string OutboundCall::ToString() const {
@@ -536,9 +536,13 @@ string OutboundCall::ToString() const {
 bool OutboundCall::DumpPB(const DumpRunningRpcsRequestPB& req,
                           RpcCallInProgressPB* resp) {
   std::lock_guard<simple_spinlock> l(lock_);
+  auto state_value = state();
+  if (!req.dump_timed_out() && state_value == RpcCallState::TIMED_OUT) {
+    return false;
+  }
   InitHeader(resp->mutable_header());
-  resp->set_micros_elapsed(MonoTime::Now().GetDeltaSince(start_).ToMicroseconds());
-  resp->set_state(state());
+  resp->set_elapsed_millis(MonoTime::Now().GetDeltaSince(start_).ToMilliseconds());
+  resp->set_state(state_value);
   if (req.include_traces() && trace_) {
     resp->set_trace_buffer(trace_->DumpToString(true));
   }
@@ -589,33 +593,13 @@ CallResponse::CallResponse()
     : parsed_(false) {
 }
 
-CallResponse::CallResponse(CallResponse&& rhs) {
-  DCHECK(rhs.parsed_);
-  parsed_ = rhs.parsed_;
-  header_.Swap(&rhs.header_);
-  serialized_response_ = rhs.serialized_response_;
-  sidecar_slices_ = rhs.sidecar_slices_;
-  response_data_ = std::move(rhs.response_data_);
-}
-
-void CallResponse::operator=(CallResponse&& rhs) {
-  DCHECK(rhs.parsed_);
-  DCHECK(!parsed_);
-  parsed_ = rhs.parsed_;
-  header_.Swap(&rhs.header_);
-  serialized_response_ = rhs.serialized_response_;
-  sidecar_slices_ = rhs.sidecar_slices_;
-  response_data_ = std::move(rhs.response_data_);
-}
-
-Status CallResponse::GetSidecar(int idx, Slice* sidecar) const {
+Result<Slice> CallResponse::GetSidecar(int idx) const {
   DCHECK(parsed_);
-  if (idx < 0 || idx >= header_.sidecar_offsets_size()) {
-    return STATUS(InvalidArgument, strings::Substitute(
-        "Index $0 does not reference a valid sidecar", idx));
+  if (idx < 0 || idx + 1 >= sidecar_bounds_.size()) {
+    return STATUS_FORMAT(InvalidArgument,
+        "Index $0 does not reference a valid sidecar", idx);
   }
-  *sidecar = sidecar_slices_[idx];
-  return Status::OK();
+  return Slice(sidecar_bounds_[idx], sidecar_bounds_[idx + 1]);
 }
 
 Status CallResponse::ParseFrom(CallData* call_data) {
@@ -629,28 +613,24 @@ Status CallResponse::ParseFrom(CallData* call_data) {
   // Use information from header to extract the payload slices.
   const size_t sidecars = header_.sidecar_offsets_size();
 
-  if (sidecars > kMaxSidecarSlices) {
-    return STATUS(Corruption, strings::Substitute(
-        "Received $0 additional payload slices, expected at most $1",
-        sidecars, kMaxSidecarSlices));
-  }
-
   if (sidecars > 0) {
     serialized_response_ = Slice(entire_message.data(),
                                  header_.sidecar_offsets(0));
-    for (size_t i = 0; i < sidecars; ++i) {
-      size_t begin_offset = header_.sidecar_offsets(i);
-      size_t end_offset = i + 1 == sidecars ? entire_message.size()
-                                            : header_.sidecar_offsets(i + 1);
-      if (end_offset > entire_message.size() || end_offset < begin_offset) {
-        return STATUS(Corruption, strings::Substitute(
-            "Invalid sidecar offsets; sidecar $0 apparently starts at $1,"
-            " ends at $2, but the entire message has length $3",
-            i, begin_offset, end_offset, entire_message.size()));
+    sidecar_bounds_.reserve(sidecars + 1);
+
+    uint32_t prev_offset = 0;
+    for (auto offset : header_.sidecar_offsets()) {
+      if (offset > entire_message.size() || offset < prev_offset) {
+        return STATUS_FORMAT(
+            Corruption,
+            "Invalid sidecar offsets; sidecar apparently starts at $0,"
+            " ends at $1, but the entire message has length $2",
+            prev_offset, offset, entire_message.size());
       }
-      sidecar_slices_[i] = Slice(entire_message.data() + begin_offset,
-                                 entire_message.data() + end_offset);
+      sidecar_bounds_.push_back(entire_message.data() + offset);
+      prev_offset = offset;
     }
+    sidecar_bounds_.emplace_back(entire_message.end());
   } else {
     serialized_response_ = entire_message;
   }

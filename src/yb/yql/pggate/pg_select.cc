@@ -67,7 +67,7 @@ Status PgSelect::Prepare(PreventRestart prevent_restart) {
 
 void PgSelect::PrepareColumns() {
   // When reading, only values of partition columns are special-cased in protobuf.
-  // Because Kudu API requires that partition columns must be listed in their created-order, the
+  // Because DocDB API requires that partition columns must be listed in their created-order, the
   // slots for partition column bind expressions are allocated here in correct order.
   if (index_id_.IsValid()) {
     for (PgColumn &col : index_desc_->columns()) {
@@ -229,10 +229,12 @@ Status PgSelect::Exec(const PgExecParameters *exec_params) {
   // Set execution control parameters.
   doc_op_->SetExecParams(exec_params);
 
-  // Set column references in protobuf.
+  // Set column references in protobuf and whether query is aggregate.
   SetColumnRefIds(table_desc_, read_req_->mutable_column_refs());
+  read_req_->set_is_aggregate(has_aggregate_targets());
   if (index_id_.IsValid()) {
     SetColumnRefIds(index_desc_, index_req_->mutable_column_refs());
+    DCHECK(!has_aggregate_targets()) << "Aggregate pushdown should not happen with index";
   }
 
   // Execute select statement asynchronously.

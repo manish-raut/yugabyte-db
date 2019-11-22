@@ -28,18 +28,13 @@
 
 #include "yb/server/hybrid_clock.h"
 
+#include "yb/tserver/tserver_util_fwd.h"
+
 #include "yb/yql/pggate/pg_env.h"
 #include "yb/yql/pggate/pg_column.h"
 #include "yb/yql/pggate/pg_tabledesc.h"
 
 namespace yb {
-
-namespace tserver {
-
-class TServerSharedMemory;
-
-}  // namespace tserver
-
 namespace pggate {
 
 YB_STRONGLY_TYPED_BOOL(OpBuffered);
@@ -61,7 +56,8 @@ class PgSession : public RefCountedThreadSafe<PgSession> {
   PgSession(client::YBClient* client,
             const string& database_name,
             scoped_refptr<PgTxnManager> pg_txn_manager,
-            scoped_refptr<server::HybridClock> clock);
+            scoped_refptr<server::HybridClock> clock,
+            const tserver::TServerSharedObject* tserver_shared_object);
   virtual ~PgSession();
 
   //------------------------------------------------------------------------------------------------
@@ -82,6 +78,8 @@ class PgSession : public RefCountedThreadSafe<PgSession> {
                                 PgOid source_database_oid,
                                 PgOid nexte_oid);
   CHECKED_STATUS DropDatabase(const std::string& database_name, PgOid database_oid);
+  client::YBNamespaceAlterer *NewNamespaceAlterer(const std::string& namespace_name,
+                                                  PgOid database_oid);
 
   CHECKED_STATUS ReserveOids(PgOid database_oid,
                              PgOid nexte_oid,
@@ -157,7 +155,7 @@ class PgSession : public RefCountedThreadSafe<PgSession> {
   //------------------------------------------------------------------------------------------------
   // Access functions.
   // TODO(neil) Need to double check these code later.
-  // - This code in CQL processor has a lock. CQL comment: It can be accessed by mutiple calls in
+  // - This code in CQL processor has a lock. CQL comment: It can be accessed by multiple calls in
   //   parallel so they need to be thread-safe for shared reads / exclusive writes.
   //
   // - Currently, for each session, server executes the client requests sequentially, so the
@@ -254,9 +252,10 @@ class PgSession : public RefCountedThreadSafe<PgSession> {
   bool has_txn_ops_ = false;
   bool has_non_txn_ops_ = false;
 
-  // Local tablet-server shared memory segment handle. This has a value of nullptr
-  // if the shared memory has not been initialized (e.g. during initdb).
-  std::unique_ptr<tserver::TServerSharedMemory> tserver_shared_memory_;
+  // True if the read request has a row mark.
+  bool has_row_mark_ = false;
+
+  const tserver::TServerSharedObject* const tserver_shared_object_;
 };
 
 }  // namespace pggate

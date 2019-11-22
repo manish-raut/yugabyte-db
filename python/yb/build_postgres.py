@@ -26,6 +26,7 @@ import multiprocessing
 import subprocess
 import json
 import hashlib
+import time
 
 from subprocess import check_call
 
@@ -38,7 +39,7 @@ from yb.common_util import YB_SRC_ROOT, get_build_type_from_build_root, get_bool
 
 REMOVE_CONFIG_CACHE_MSG_RE = re.compile(r'error: run.*\brm config[.]cache\b.*and start over')
 
-ALLOW_REMOTE_COMPILATION = False
+ALLOW_REMOTE_COMPILATION = True
 
 CONFIG_ENV_VARS = [
     'CFLAGS',
@@ -123,7 +124,7 @@ class PostgresBuilder:
         self.env_vars_for_build_stamp = set()
 
         # Check if the outer build is using runs the compiler on build workers.
-        self.build_uses_remote_compilation = os.environ.get('YB_REMOTE_COMPILATION')
+        self.build_uses_remote_compilation = os.environ.get('YB_REMOTE_COMPILATION') == '1'
         if self.build_uses_remote_compilation == 'auto':
             raise RuntimeError(
                 "No 'auto' value is allowed for YB_REMOTE_COMPILATION at this point")
@@ -167,6 +168,8 @@ class PostgresBuilder:
         parser.add_argument('--ldflags', help='Linker flags for all binaries')
         parser.add_argument('--ldflags_ex', help='Linker flags for executables')
         parser.add_argument('--compiler_type', help='Compiler type, e.g. gcc or clang')
+        parser.add_argument('--openssl_include_dir', help='OpenSSL include dir')
+        parser.add_argument('--openssl_lib_dir', help='OpenSSL lib dir')
 
         self.args = parser.parse_args()
         if not self.args.build_root:
@@ -183,6 +186,9 @@ class PostgresBuilder:
         self.build_type = get_build_type_from_build_root(self.build_root)
         self.postgres_src_dir = os.path.join(YB_SRC_ROOT, 'src', 'postgres')
         self.compiler_type = self.args.compiler_type or os.getenv('YB_COMPILER_TYPE')
+        self.openssl_include_dir = self.args.openssl_include_dir
+        self.openssl_lib_dir = self.args.openssl_lib_dir
+
         if not self.compiler_type:
             raise RuntimeError(
                 "Compiler type not specified using either --compiler_type or YB_COMPILER_TYPE")
@@ -225,6 +231,8 @@ class PostgresBuilder:
             raise RuntimeError(
                     ("Invalid step specified for setting env vars, must be either 'configure' "
                      "or 'make'").format(step))
+        is_configure_step = step == 'configure'
+        is_make_step = step == 'make'
 
         self.set_env_var('YB_PG_BUILD_STEP', step)
         self.set_env_var('YB_BUILD_ROOT', self.build_root)
@@ -249,7 +257,7 @@ class PostgresBuilder:
                 '-Wno-error=builtin-requires-header'
             ]
 
-        if step == 'make':
+        if is_make_step:
             additional_c_cxx_flags += [
                 '-Wall',
                 '-Werror',
@@ -317,9 +325,8 @@ class PostgresBuilder:
             for env_var_name in ['CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'LDFLAGS_EX', 'LIBS']:
                 if env_var_name in os.environ:
                     logging.info("%s: %s", env_var_name, os.environ[env_var_name])
-        # PostgreSQL builds pretty fast, and we don't want to use our remote compilation over SSH
-        # for it as it might have issues with parallelism.
-        self.remote_compilation_allowed = ALLOW_REMOTE_COMPILATION and step == 'make'
+
+        self.remote_compilation_allowed = ALLOW_REMOTE_COMPILATION and is_make_step
 
         self.set_env_var(
             'YB_REMOTE_COMPILATION',
@@ -383,6 +390,9 @@ class PostgresBuilder:
                 '--prefix', self.pg_prefix,
                 '--with-extra-version=-YB-' + self.get_yb_version(),
                 '--enable-depend',
+                '--with-openssl',
+                '--with-includes=' + self.openssl_include_dir,
+                '--with-libraries=' + self.openssl_lib_dir,
                 # We're enabling debug symbols for all types of builds.
                 '--enable-debug']
         if not get_bool_env_var('YB_NO_PG_CONFIG_CACHE'):
@@ -591,8 +601,6 @@ class PostgresBuilder:
 
     def postprocess_pg_compile_command(self, compile_command_item):
         directory = compile_command_item['directory']
-        if 'catalog_manager.cc' in str(compile_command_item):
-            logging.info(json.dumps(compile_command_item))
         if 'command' not in compile_command_item and 'arguments' not in compile_command_item:
             raise ValueError(
                 "Invalid compile command item: %s (neither 'command' nor 'arguments' are present)" %
@@ -711,6 +719,7 @@ class PostgresBuilder:
         self.build_postgres()
 
     def build_postgres(self):
+        start_time_sec = time.time()
         if self.args.clean:
             self.clean_postgres()
 
@@ -730,13 +739,19 @@ class PostgresBuilder:
                 logging.info("Still need to create compile_commands.json, proceeding.")
             else:
                 return
+
         with WorkDirContext(self.pg_build_root):
             if self.should_build:
                 self.sync_postgres_source()
                 if os.environ.get('YB_PG_SKIP_CONFIGURE', '0') != '1':
+                    configure_start_time_sec = time.time()
                     self.configure_postgres()
+                    logging.info("The configure step of building PostgreSQL took %.1f sec",
+                                 time.time() - configure_start_time_sec)
+            make_start_time_sec = time.time()
             self.make_postgres()
-
+            logging.info("The make step of building PostgreSQL took %.1f sec",
+                         time.time() - make_start_time_sec)
         final_build_stamp_no_env = self.get_build_stamp(include_env_vars=False)
         if final_build_stamp_no_env == initial_build_stamp_no_env:
             logging.info("Updating build stamp file at %s", self.build_stamp_path)
@@ -744,6 +759,7 @@ class PostgresBuilder:
                 build_stamp_file.write(initial_build_stamp)
         else:
             logging.warning("PostgreSQL build stamp changed during the build! Not updating.")
+        logging.info("PostgreSQL build took %.1f sec", time.time() - start_time_sec)
 
 
 if __name__ == '__main__':

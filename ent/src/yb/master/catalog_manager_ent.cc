@@ -21,19 +21,22 @@
 #include "yb/cdc/cdc_service.h"
 #include "yb/client/schema.h"
 #include "yb/client/table.h"
+#include "yb/client/table_alterer.h"
 #include "yb/common/common.pb.h"
 #include "yb/gutil/bind.h"
 #include "yb/gutil/strings/substitute.h"
 #include "yb/master/master_defaults.h"
+#include "yb/master/master_util.h"
 #include "yb/master/sys_catalog.h"
 #include "yb/master/sys_catalog-internal.h"
 #include "yb/master/async_snapshot_tasks.h"
-#include "yb/master/universe_key_registry_service.h"
+#include "yb/master/encryption_manager.h"
 #include "yb/tserver/backup.proxy.h"
 #include "yb/util/cast.h"
 #include "yb/util/service_util.h"
 #include "yb/util/tostring.h"
 #include "yb/util/string_util.h"
+#include "yb/util/random_util.h"
 #include "yb/cdc/cdc_consumer.pb.h"
 
 using std::string;
@@ -46,6 +49,10 @@ using strings::Substitute;
 DEFINE_uint64(cdc_state_table_num_tablets, 0,
     "Number of tablets to use when creating the CDC state table."
     "0 to use the same default num tablets as for regular tables.");
+
+DEFINE_int32(cdc_wal_retention_time_secs, 4 * 3600,
+             "WAL retention time in seconds to be used for tables for which a CDC stream was "
+             "created.");
 
 namespace yb {
 
@@ -100,7 +107,7 @@ class CDCStreamLoader : public Visitor<PersistentCDCStreamInfo> {
     DCHECK(!ContainsKey(catalog_manager_->cdc_stream_map_, stream_id))
         << "CDC stream already exists: " << stream_id;
 
-    if (!ContainsKey(catalog_manager_->table_ids_map_, metadata.table_id())) {
+    if (!ContainsKey(*catalog_manager_->table_ids_map_, metadata.table_id())) {
       LOG(ERROR) << "Invalid table ID " << metadata.table_id() << " for stream " << stream_id;
       // TODO (#2059): Potentially signals a race condition that table got deleted while stream was
       // being created.
@@ -155,7 +162,7 @@ class UniverseReplicationLoader : public Visitor<PersistentUniverseReplicationIn
       // TODO: Should we delete all failed universe replication items?
     }
 
-    // Add universe replication info to the universe replication  map.
+    // Add universe replication info to the universe replication map.
     catalog_manager_->universe_replication_map_[ri->id()] = ri;
     l->Commit();
 
@@ -467,7 +474,7 @@ Status CatalogManager::RestoreEntry(const SysRowEntry& entry, const SnapshotId& 
     }
     case SysRowEntry::TABLE: { // Restore TABLES.
       TRACE("Looking up table");
-      scoped_refptr<TableInfo> table = FindPtrOrNull(table_ids_map_, entry.id());
+      scoped_refptr<TableInfo> table = FindPtrOrNull(*table_ids_map_, entry.id());
       if (table == nullptr) {
         // Restore Table.
         // TODO: implement
@@ -480,7 +487,7 @@ Status CatalogManager::RestoreEntry(const SysRowEntry& entry, const SnapshotId& 
     }
     case SysRowEntry::TABLET: { // Restore TABLETS.
       TRACE("Looking up tablet");
-      scoped_refptr<TabletInfo> tablet = FindPtrOrNull(tablet_map_, entry.id());
+      scoped_refptr<TabletInfo> tablet = FindPtrOrNull(*tablet_map_, entry.id());
       if (tablet == nullptr) {
         // Restore Tablet.
         // TODO: implement
@@ -554,7 +561,7 @@ Status CatalogManager::DeleteSnapshot(const DeleteSnapshotRequestPB* req,
   for (const SysRowEntry& entry : snapshot_pb.entries()) {
     if (entry.type() == SysRowEntry::TABLET) {
       TRACE("Looking up tablet");
-      scoped_refptr<TabletInfo> tablet = FindPtrOrNull(tablet_map_, entry.id());
+      scoped_refptr<TabletInfo> tablet = FindPtrOrNull(*tablet_map_, entry.id());
       if (tablet == nullptr) {
         LOG(WARNING) << "Deleting tablet not found " << entry.id();
       } else {
@@ -665,7 +672,7 @@ Status CatalogManager::ChangeEncryptionInfo(const ChangeEncryptionInfoRequestPB*
   auto l = cluster_config_->LockForWrite();
   auto encryption_info = l->mutable_data()->pb.mutable_encryption_info();
 
-  RETURN_NOT_OK(RotateUniverseKey(req, encryption_info, resp));
+  RETURN_NOT_OK(encryption_manager_->ChangeEncryptionInfo(req, encryption_info));
 
   l->mutable_data()->pb.set_version(l->mutable_data()->pb.version() + 1);
   RETURN_NOT_OK(sys_catalog_->UpdateItem(cluster_config_.get(), leader_ready_term_));
@@ -675,6 +682,7 @@ Status CatalogManager::ChangeEncryptionInfo(const ChangeEncryptionInfoRequestPB*
   for (auto& entry : should_send_universe_key_registry_) {
     entry.second = true;
   }
+
   return Status::OK();
 }
 
@@ -682,70 +690,7 @@ Status CatalogManager::IsEncryptionEnabled(const IsEncryptionEnabledRequestPB* r
                                            IsEncryptionEnabledResponsePB* resp) {
   auto l = cluster_config_->LockForRead();
   const auto& encryption_info = l->data().pb.encryption_info();
-  resp->set_encryption_enabled(encryption_info.encryption_enabled());
-  if (!encryption_info.encryption_enabled()) {
-    return Status::OK();
-  }
-
-  // Decrypt the universe key registry to get the latest version id.
-  auto decrypted_registry =
-      VERIFY_RESULT(DecryptUniverseKeyRegistry(
-          encryption_info.universe_key_registry_encoded(), encryption_info.key_path()));
-  auto universe_key_registry =
-      VERIFY_RESULT(pb_util::ParseFromSlice<UniverseKeyRegistryPB>(decrypted_registry));
-
-  resp->set_key_id(universe_key_registry.latest_version_id());
-  return Status::OK();
-}
-
-Status CatalogManager::InitCDCConsumer(
-    const std::vector<CDCConsumerStreamInfo>& consumer_info,
-    const std::string& master_addrs,
-    const std::string& producer_universe_uuid) {
-
-  std::unordered_set<HostPort, HostPortHash> tserver_addrs;
-
-  cdc::ProducerEntryPB producer_entry;
-  for (const auto& stream_info : consumer_info) {
-    // Get the tablets in the consumer table.
-    GetTableLocationsRequestPB consumer_table_req;
-    GetTableLocationsResponsePB consumer_table_resp;
-    TableIdentifierPB table_identifer;
-    table_identifer.set_table_id(stream_info.consumer_table_id);
-    *(consumer_table_req.mutable_table()) = table_identifer;
-    RETURN_NOT_OK(GetTableLocations(&consumer_table_req, &consumer_table_resp));
-    cdc::StreamEntryPB stream_entry;
-    RETURN_NOT_OK(RegisterTableSubscriber(
-        stream_info.producer_table_id, stream_info.consumer_table_id, master_addrs,
-        consumer_table_resp, &tserver_addrs, &stream_entry));
-    (*producer_entry.mutable_stream_map())[stream_info.stream_id] = std::move(stream_entry);
-  }
-
-  auto master_addrs_list = StringSplit(master_addrs, ',');
-  producer_entry.mutable_master_addrs()->Reserve(master_addrs_list.size());
-  for (const auto& addr : master_addrs_list) {
-    auto hp = VERIFY_RESULT(HostPort::FromString(addr, 0));
-    HostPortToPB(hp, producer_entry.add_master_addrs());
-  }
-
-  producer_entry.mutable_tserver_addrs()->Reserve(tserver_addrs.size());
-  for (const auto& addr : tserver_addrs) {
-    HostPortToPB(addr, producer_entry.add_tserver_addrs());
-  }
-
-  auto l = cluster_config_->LockForWrite();
-  auto producer_map = l->mutable_data()->pb.mutable_consumer_registry()->mutable_producer_map();
-  auto it = producer_map->find(producer_universe_uuid);
-  if (it != producer_map->end()) {
-    return STATUS(InvalidArgument, "Already created a consumer for this universe");
-  }
-
-  (*producer_map)[producer_universe_uuid] = std::move(producer_entry);
-  l->mutable_data()->pb.set_version(l->mutable_data()->pb.version() + 1);
-  RETURN_NOT_OK(sys_catalog_->UpdateItem(cluster_config_.get(), leader_ready_term_));
-  l->Commit();
-
-  return Status::OK();
+  return encryption_manager_->IsEncryptionEnabled(encryption_info, resp);
 }
 
 Status CatalogManager::ImportNamespaceEntry(const SysRowEntry& entry,
@@ -805,7 +750,7 @@ Status CatalogManager::ImportTableEntry(const SysRowEntry& entry,
   // Create new table if namespace was changed.
   if (new_namespace_id == table_data->old_namespace_id) {
     TRACE("Looking up table");
-    table = LockAndFindPtrOrNull(table_ids_map_, entry.id());
+    table = LockAndFindPtrOrNull(*table_ids_map_, entry.id());
 
     // Check table is active OR table name was changed.
     if (table != nullptr && (!table->is_running() || table->name() != meta.name())) {
@@ -835,7 +780,7 @@ Status CatalogManager::ImportTableEntry(const SysRowEntry& entry,
 
     TRACE("Looking up new table");
     {
-      table = LockAndFindPtrOrNull(table_ids_map_, table_data->new_table_id);
+      table = LockAndFindPtrOrNull(*table_ids_map_, table_data->new_table_id);
 
       if (table == nullptr) {
         return STATUS_SUBSTITUTE(
@@ -897,7 +842,7 @@ Status CatalogManager::ImportTabletEntry(const SysRowEntry& entry,
   // Update tablets IDs map.
   if (table_data.new_table_id == table_data.old_table_id) {
     TRACE("Looking up tablet");
-    scoped_refptr<TabletInfo> tablet = LockAndFindPtrOrNull(tablet_map_, entry.id());
+    scoped_refptr<TabletInfo> tablet = LockAndFindPtrOrNull(*tablet_map_, entry.id());
 
     if (tablet != nullptr) {
       IdPairPB* const pair = table_data.tablet_id_map->Add();
@@ -1281,10 +1226,9 @@ Status CatalogManager::FillHeartbeatResponse(const TSHeartbeatRequestPB* req,
 Status CatalogManager::FillHeartbeatResponseCDC(const SysClusterConfigEntryPB& cluster_config,
                                                 const TSHeartbeatRequestPB* req,
                                                 TSHeartbeatResponsePB* resp) {
-  const auto& ts_uuid = req->common().ts_instance().permanent_uuid();
+  resp->set_cluster_config_version(cluster_config.version());
   if (!cluster_config.has_consumer_registry() ||
-      !ShouldResendRegistry(ts_uuid, req->has_registration(), &should_send_consumer_registry_,
-                            &should_send_consumer_registry_mutex_)) {
+      req->cluster_config_version() >= cluster_config.version()) {
     return Status::OK();
   }
   *resp->mutable_consumer_registry() = cluster_config.consumer_registry();
@@ -1303,16 +1247,7 @@ Status CatalogManager::FillHeartbeatResponseEncryption(
   }
 
   const auto& encryption_info = cluster_config.encryption_info();
-  Slice decrypted_registry(encryption_info.universe_key_registry_encoded());
-  std::string decrypted;
-  if (encryption_info.encryption_enabled()) {
-    decrypted = VERIFY_RESULT(
-        DecryptUniverseKeyRegistry(decrypted_registry, encryption_info.key_path()));
-    decrypted_registry = Slice(decrypted);
-  }
-
-  auto registry = VERIFY_RESULT(pb_util::ParseFromSlice<UniverseKeyRegistryPB>(decrypted_registry));
-  resp->mutable_universe_key_registry()->CopyFrom(registry);
+  RETURN_NOT_OK(encryption_manager_->FillHeartbeatResponseEncryption(encryption_info, resp));
 
   return Status::OK();
 }
@@ -1464,6 +1399,17 @@ Status CatalogManager::CreateCDCStream(const CreateCDCStreamRequestPB* req,
     }
   }
 
+  AlterTableRequestPB alter_table_req;
+  alter_table_req.mutable_table()->set_table_id(req->table_id());
+  alter_table_req.set_wal_retention_secs(FLAGS_cdc_wal_retention_time_secs);
+  AlterTableResponsePB alter_table_resp;
+  Status s = this->AlterTable(&alter_table_req, &alter_table_resp, rpc);
+  if (!s.ok()) {
+    return SetupError(resp->mutable_error(), MasterErrorPB::INTERNAL_ERROR,
+        STATUS_SUBSTITUTE(InternalError,
+            "Unable to change the WAL retention time for table $0", req->table_id()));
+  }
+
   scoped_refptr<CDCStreamInfo> stream;
   {
     TRACE("Acquired catalog manager lock");
@@ -1484,7 +1430,7 @@ Status CatalogManager::CreateCDCStream(const CreateCDCStreamRequestPB* req,
   TRACE("Inserted new CDC stream into CatalogManager maps");
 
   // Update the on-disk system catalog.
-  Status s = sys_catalog_->AddItem(stream.get(), leader_ready_term_);
+  s = sys_catalog_->AddItem(stream.get(), leader_ready_term_);
   if (!s.ok()) {
     s = s.CloneAndPrepend(Substitute(
         "An error occurred while inserting CDC stream into sys-catalog: $0", s.ToString()));
@@ -1509,23 +1455,30 @@ Status CatalogManager::DeleteCDCStream(const DeleteCDCStreamRequestPB* req,
 
   RETURN_NOT_OK(CheckOnline());
 
-  if (!req->has_stream_id()) {
+  if (req->stream_id_size() < 1) {
     Status s = STATUS(InvalidArgument, "No CDC Stream ID given", req->DebugString());
     return SetupError(resp->mutable_error(), MasterErrorPB::INVALID_REQUEST, s);
   }
 
-  scoped_refptr<CDCStreamInfo> stream;
+  std::vector<scoped_refptr<CDCStreamInfo>> streams;
+  std::string streams_str;
   {
     std::shared_lock<LockType> l(lock_);
-
-    stream = FindPtrOrNull(cdc_stream_map_, req->stream_id());
-    if (stream == nullptr) {
-      Status s = STATUS(NotFound, "CDC stream does not exist", req->DebugString());
-      return SetupError(resp->mutable_error(), MasterErrorPB::OBJECT_NOT_FOUND, s);
+    for (const auto& stream_id : req->stream_id()) {
+      auto stream = FindPtrOrNull(cdc_stream_map_, stream_id);
+      if (stream == nullptr) {
+        Status s = STATUS(NotFound, "CDC stream does not exist", req->DebugString());
+        return SetupError(resp->mutable_error(), MasterErrorPB::OBJECT_NOT_FOUND, s);
+      }
+      streams.push_back(stream);
+      if (!streams_str.empty()) {
+        streams_str += ", ";
+      }
+      streams_str += stream->ToString();
     }
   }
 
-  Status s = DeleteCDCStreams(std::vector<scoped_refptr<CDCStreamInfo>>({stream}));
+  Status s = DeleteCDCStreams(streams);
   if (!s.ok()) {
     if (s.IsIllegalState()) {
       PANIC_RPC(rpc, s.message().ToString());
@@ -1533,7 +1486,7 @@ Status CatalogManager::DeleteCDCStream(const DeleteCDCStreamRequestPB* req,
     return CheckIfNoLongerLeaderAndSetupError(s, resp);
   }
 
-  LOG(INFO) << "Successfully deleted CDC stream " << stream->ToString()
+  LOG(INFO) << "Successfully deleted CDC streams " << streams_str
             << " per request from " << RequestorString(rpc);
 
   return Status::OK();
@@ -1657,12 +1610,20 @@ bool CatalogManager::CDCStreamExistsUnlocked(const CDCStreamId& stream_id) {
   return true;
 }
 
+/*
+ * UniverseReplication is setup in 3 stages within the Catalog Manager
+ * 1. SetupUniverseReplication: Creates the persistent entry and validates input
+ * 2. GetTableSchemaCallback:   Validates compatibility between Producer & Consumer Tables
+ * 3. CreateCDCStreamCallback:  Setup RPC connections for CDC Streaming
+ * 4. InitCDCConsumer:          Initializes the Consumer architecture to begin tailing data
+ */
 Status CatalogManager::SetupUniverseReplication(const SetupUniverseReplicationRequestPB* req,
                                                 SetupUniverseReplicationResponsePB* resp,
                                                 rpc::RpcContext* rpc) {
   LOG(INFO) << "SetupUniverseReplication from " << RequestorString(rpc)
             << ": " << req->DebugString();
 
+  // Sanity checking section.
   RETURN_NOT_OK(CheckOnline());
 
   if (!req->has_producer_id()) {
@@ -1687,6 +1648,7 @@ Status CatalogManager::SetupUniverseReplication(const SetupUniverseReplicationRe
     }
   }
 
+  // Create an entry in the system catalog DocDB for this new universe replication.
   ri = new UniverseReplicationInfo(req->producer_id());
   ri->mutable_metadata()->StartMutation();
   SysUniverseReplicationEntryPB *metadata = &ri->mutable_metadata()->mutable_dirty()->pb;
@@ -1695,7 +1657,6 @@ Status CatalogManager::SetupUniverseReplication(const SetupUniverseReplicationRe
   metadata->mutable_tables()->CopyFrom(req->producer_table_ids());
   metadata->set_state(SysUniverseReplicationEntryPB::INITIALIZING);
 
-  // Update the on-disk system catalog.
   Status s = sys_catalog_->AddItem(ri.get(), leader_ready_term_);
   if (!s.ok()) {
     s = s.CloneAndPrepend(Substitute(
@@ -1706,7 +1667,7 @@ Status CatalogManager::SetupUniverseReplication(const SetupUniverseReplicationRe
   }
   TRACE("Wrote universe replication info to sys-catalog");
 
-  // Commit the in-memory state.
+  // Commit the in-memory state now that it's added to the persistent catalog.
   ri->mutable_metadata()->CommitMutation();
   LOG(INFO) << "Setup universe replication from producer " << ri->ToString();
 
@@ -1715,6 +1676,7 @@ Status CatalogManager::SetupUniverseReplication(const SetupUniverseReplicationRe
     universe_replication_map_[ri->id()] = ri;
   }
 
+  // Initialize the CDC Stream by querying the Producer server for RPC sanity checks.
   auto result = ri->GetOrCreateCDCRpcTasks(req->producer_master_addresses());
   if (!result.ok()) {
     MarkUniverseReplicationFailed(ri);
@@ -1722,9 +1684,11 @@ Status CatalogManager::SetupUniverseReplication(const SetupUniverseReplicationRe
   }
   auto cdc_rpc = *result;
 
+  // For each table, run an async RPC task to verify a sufficient Producer:Consumer schema match.
   for (int i = 0; i < req->producer_table_ids_size(); i++) {
     auto table_info = std::make_shared<client::YBTableInfo>();
 
+    // SETUP CONTINUES after this async call.
     s = cdc_rpc->client()->GetTableSchemaById(
         req->producer_table_ids(i), table_info,
         Bind(&enterprise::CatalogManager::GetTableSchemaCallback, Unretained(this),
@@ -1758,68 +1722,6 @@ void CatalogManager::MarkUniverseReplicationFailed(
     return;
   }
   l->Commit();
-}
-
-Status CatalogManager::DeleteUniverseReplication(const DeleteUniverseReplicationRequestPB* req,
-                                                 DeleteUniverseReplicationResponsePB* resp,
-                                                 rpc::RpcContext* rpc) {
-  LOG(INFO) << "Servicing DeleteUniverseReplication request from " << RequestorString(rpc)
-            << ": " << req->ShortDebugString();
-
-  RETURN_NOT_OK(CheckOnline());
-
-  if (!req->has_producer_id()) {
-    Status s = STATUS(InvalidArgument, "Producer universe ID required", req->DebugString());
-    return SetupError(resp->mutable_error(), MasterErrorPB::INVALID_REQUEST, s);
-  }
-
-  scoped_refptr<UniverseReplicationInfo> ri;
-  {
-    std::shared_lock<LockType> catalog_lock(lock_);
-    TRACE("Acquired catalog manager lock");
-
-    ri = FindPtrOrNull(universe_replication_map_, req->producer_id());
-    if (ri == nullptr) {
-      Status s = STATUS(NotFound, "Universe replication info does not exist", req->DebugString());
-      return SetupError(resp->mutable_error(), MasterErrorPB::OBJECT_NOT_FOUND, s);
-    }
-  }
-
-  auto l = ri->LockForWrite();
-  l->mutable_data()->pb.set_state(SysUniverseReplicationEntryPB::DELETED);
-
-  // Delete subscribers.
-  for (const auto& table : l->data().pb.validated_tables()) {
-    LOG(INFO) << "Deleting subscriber for table " << table.second;
-    // TODO: Delete subscribers.
-  }
-
-  if (!l->data().pb.table_streams().empty()) {
-    // Delete CDC streams.
-    auto result = ri->GetOrCreateCDCRpcTasks(l->data().pb.producer_master_addresses());
-    if (!result.ok()) {
-      l->mutable_data()->pb.set_state(SysUniverseReplicationEntryPB::DELETED_ERROR);
-      l->Commit();
-      return SetupError(resp->mutable_error(), MasterErrorPB::INVALID_REQUEST, result.status());
-    }
-    auto cdc_rpc = *result;
-
-    for (const auto &table : l->data().pb.table_streams()) {
-      cdc_rpc->client()->DeleteCDCStream(
-          table.second,
-          Bind(&enterprise::CatalogManager::DeleteCDCStreamCallback, Unretained(this),
-               ri->id(), table.first));
-    }
-  } else {
-    // No streams, delete universe.
-    DeleteUniverseReplicationUnlocked(ri);
-  }
-  l->Commit();
-
-  LOG(INFO) << "Processed delete universe replication " << ri->ToString()
-            << " per request from " << RequestorString(rpc);
-
-  return Status::OK();
 }
 
 void CatalogManager::GetTableSchemaCallback(
@@ -1883,6 +1785,7 @@ void CatalogManager::GetTableSchemaCallback(
     return;
   }
 
+  // We have a table match.  Now get the table schema and validate
   status = GetTableSchema(&req, &resp);
   if (!status.ok() || resp.has_error()) {
     LOG(ERROR) << "Error while getting table schema: " << status.ToString();
@@ -1921,7 +1824,6 @@ void CatalogManager::GetTableSchemaCallback(
   }
   auto cdc_rpc = *res;
 
-  // Add to validated tables.
   if (l->data().is_deleted_or_failed()) {
     // Nothing to do since universe is being deleted.
     return;
@@ -1930,7 +1832,7 @@ void CatalogManager::GetTableSchemaCallback(
   auto map = l->mutable_data()->pb.mutable_validated_tables();
   (*map)[info->table_id] = resp.identifier().table_id();
 
-  // Create CDC stream if all tables are validated.
+  // Now, all tables are validated.  Create CDC stream for each.
   if (l->mutable_data()->pb.validated_tables_size() == l->mutable_data()->pb.tables_size()) {
     l->mutable_data()->pb.set_state(SysUniverseReplicationEntryPB::VALIDATED);
 
@@ -1982,13 +1884,14 @@ void CatalogManager::CreateCDCStreamCallback(
 
   auto l = universe->LockForWrite();
   if (l->data().is_deleted_or_failed()) {
-    // Nothing to do since universe is being deleted.
+    // Nothing to do if universe is being deleted.
     return;
   }
 
   auto map = l->mutable_data()->pb.mutable_table_streams();
   (*map)[table_id] = *stream_id;
 
+  // This functions as a barrier: waiting for the last RPC call from GetTableSchemaCallback.
   if (l->mutable_data()->pb.table_streams_size() == l->data().pb.tables_size()) {
     // Register CDC consumers for all tables and start replication.
     LOG(INFO) << "Registering CDC consumers for universe " << universe->id();
@@ -2010,7 +1913,6 @@ void CatalogManager::CreateCDCStreamCallback(
 
     Status s = InitCDCConsumer(consumer_info, HostPort::ToCommaSeparatedString(hp),
                                l->data().pb.producer_id());
-
     if (!s.ok()) {
       LOG(ERROR) << "Error registering subscriber: " << s.ToString();
       l->mutable_data()->pb.set_state(SysUniverseReplicationEntryPB::FAILED);
@@ -2019,7 +1921,7 @@ void CatalogManager::CreateCDCStreamCallback(
     }
   }
 
-  // Update sys_catalog.
+  // Update sys_catalog with new producer table id info.
   Status status = sys_catalog_->UpdateItem(universe.get(), leader_ready_term_);
   if (!status.ok()) {
     status = status.CloneAndPrepend(
@@ -2031,35 +1933,129 @@ void CatalogManager::CreateCDCStreamCallback(
   l->Commit();
 }
 
-void CatalogManager::DeleteCDCStreamCallback(
-    const  std::string& universe_id, const TableId& table_id, const Status& s) {
-  scoped_refptr<UniverseReplicationInfo> universe;
+Status CatalogManager::InitCDCConsumer(
+    const std::vector<CDCConsumerStreamInfo>& consumer_info,
+    const std::string& master_addrs,
+    const std::string& producer_universe_uuid) {
+
+  std::unordered_set<HostPort, HostPortHash> tserver_addrs;
+
+  // Get the tablets in the consumer table.
+  cdc::ProducerEntryPB producer_entry;
+  for (const auto& stream_info : consumer_info) {
+    GetTableLocationsRequestPB consumer_table_req;
+    consumer_table_req.set_max_returned_locations(std::numeric_limits<int32_t>::max());
+    GetTableLocationsResponsePB consumer_table_resp;
+    TableIdentifierPB table_identifer;
+    table_identifer.set_table_id(stream_info.consumer_table_id);
+    *(consumer_table_req.mutable_table()) = table_identifer;
+    RETURN_NOT_OK(GetTableLocations(&consumer_table_req, &consumer_table_resp));
+    cdc::StreamEntryPB stream_entry;
+    // Get producer tablets and map them to the consumer tablets
+    RETURN_NOT_OK(CreateTabletMapping(
+        stream_info.producer_table_id, stream_info.consumer_table_id, master_addrs,
+        consumer_table_resp, &tserver_addrs, &stream_entry));
+    (*producer_entry.mutable_stream_map())[stream_info.stream_id] = std::move(stream_entry);
+  }
+
+  // Log the Network topology of the Producer Cluster
+  auto master_addrs_list = StringSplit(master_addrs, ',');
+  producer_entry.mutable_master_addrs()->Reserve(master_addrs_list.size());
+  for (const auto& addr : master_addrs_list) {
+    auto hp = VERIFY_RESULT(HostPort::FromString(addr, 0));
+    HostPortToPB(hp, producer_entry.add_master_addrs());
+  }
+
+  producer_entry.mutable_tserver_addrs()->Reserve(tserver_addrs.size());
+  for (const auto& addr : tserver_addrs) {
+    HostPortToPB(addr, producer_entry.add_tserver_addrs());
+  }
+
+  auto l = cluster_config_->LockForWrite();
+  auto producer_map = l->mutable_data()->pb.mutable_consumer_registry()->mutable_producer_map();
+  auto it = producer_map->find(producer_universe_uuid);
+  if (it != producer_map->end()) {
+    return STATUS(InvalidArgument, "Already created a consumer for this universe");
+  }
+
+  // Store this topology as metadata in DocDB.
+  (*producer_map)[producer_universe_uuid] = std::move(producer_entry);
+  l->mutable_data()->pb.set_version(l->mutable_data()->pb.version() + 1);
+  RETURN_NOT_OK(sys_catalog_->UpdateItem(cluster_config_.get(), leader_ready_term_));
+  l->Commit();
+
+  return Status::OK();
+}
+
+Status CatalogManager::DeleteUniverseReplication(const DeleteUniverseReplicationRequestPB* req,
+                                                 DeleteUniverseReplicationResponsePB* resp,
+                                                 rpc::RpcContext* rpc) {
+  LOG(INFO) << "Servicing DeleteUniverseReplication request from " << RequestorString(rpc)
+            << ": " << req->ShortDebugString();
+
+  RETURN_NOT_OK(CheckOnline());
+
+  if (!req->has_producer_id()) {
+    Status s = STATUS(InvalidArgument, "Producer universe ID required", req->DebugString());
+    return SetupError(resp->mutable_error(), MasterErrorPB::INVALID_REQUEST, s);
+  }
+
+  scoped_refptr<UniverseReplicationInfo> ri;
   {
     std::shared_lock<LockType> catalog_lock(lock_);
     TRACE("Acquired catalog manager lock");
 
-    universe = FindPtrOrNull(universe_replication_map_, universe_id);
-    if (universe == nullptr) {
-      LOG(ERROR) << "Universe not found: " << universe_id;
-      return;
+    ri = FindPtrOrNull(universe_replication_map_, req->producer_id());
+    if (ri == nullptr) {
+      Status s = STATUS(NotFound, "Universe replication info does not exist", req->DebugString());
+      return SetupError(resp->mutable_error(), MasterErrorPB::OBJECT_NOT_FOUND, s);
     }
   }
 
-  // Delete from universe.
-  if (!s.ok()) {
-    LOG(ERROR) << "Error deleting CDC stream for universe: " << universe->id()
-               << ", table: " << table_id;
-    MarkUniverseReplicationFailed(universe);
-    return;
+  auto l = ri->LockForWrite();
+  l->mutable_data()->pb.set_state(SysUniverseReplicationEntryPB::DELETED);
+
+  // Delete subscribers.
+  LOG(INFO) << "Deleting subscribers for producer " << req->producer_id();
+  {
+    auto cl = cluster_config_->LockForWrite();
+    auto producer_map = cl->mutable_data()->pb.mutable_consumer_registry()->mutable_producer_map();
+    auto it = producer_map->find(req->producer_id());
+    if (it != producer_map->end()) {
+      producer_map->erase(it);
+    }
+    cl->mutable_data()->pb.set_version(cl->mutable_data()->pb.version() + 1);
+    RETURN_NOT_OK(sys_catalog_->UpdateItem(cluster_config_.get(), leader_ready_term_));
+    cl->Commit();
   }
 
-  auto l = universe->LockForWrite();
-  l->mutable_data()->pb.mutable_table_streams()->erase(table_id);
-  l->mutable_data()->pb.mutable_validated_tables()->erase(table_id);
-  if (l->mutable_data()->pb.validated_tables().size() == 0) {
-    DeleteUniverseReplicationUnlocked(universe);
+  if (!l->data().pb.table_streams().empty()) {
+    // Delete CDC streams.
+    auto result = ri->GetOrCreateCDCRpcTasks(l->data().pb.producer_master_addresses());
+    if (!result.ok()) {
+      LOG(WARNING) << "Unable to create cdc rpc task. CDC streams won't be deleted: " << result;
+    } else {
+      auto cdc_rpc = *result;
+
+      vector<CDCStreamId> streams;
+      for (const auto& table : l->data().pb.table_streams()) {
+        streams.push_back(table.second);
+      }
+      auto s = cdc_rpc->client()->DeleteCDCStream(streams);
+      if (!s.ok()) {
+        LOG(WARNING) << "Unable to delete CDC stream " << s;
+      }
+    }
   }
+
+  // Delete universe.
+  DeleteUniverseReplicationUnlocked(ri);
   l->Commit();
+
+  LOG(INFO) << "Processed delete universe replication " << ri->ToString()
+            << " per request from " << RequestorString(rpc);
+
+  return Status::OK();
 }
 
 void CatalogManager::DeleteUniverseReplicationUnlocked(
@@ -2078,6 +2074,75 @@ void CatalogManager::DeleteUniverseReplicationUnlocked(
     LOG(ERROR) << "An error occured while removing replication info from map: " << s.ToString()
                << ": universe_id: " << universe->id();
   }
+}
+
+Status CatalogManager::SetUniverseReplicationEnabled(
+    const SetUniverseReplicationEnabledRequestPB* req,
+    SetUniverseReplicationEnabledResponsePB* resp,
+    rpc::RpcContext* rpc) {
+  LOG(INFO) << "Servicing SetUniverseReplicationEnabled request from " << RequestorString(rpc)
+            << ": " << req->ShortDebugString();
+
+  // Sanity Checking Cluster State and Input.
+  RETURN_NOT_OK(CheckOnline());
+
+  if (!req->has_producer_id()) {
+    Status s = STATUS(InvalidArgument, "Producer universe ID must be provided", req->DebugString());
+    return SetupError(resp->mutable_error(), MasterErrorPB::INVALID_REQUEST, s);
+  }
+  if (!req->has_is_enabled()) {
+    Status s = STATUS(InvalidArgument, "Must explicitly set whether to enable", req->DebugString());
+    return SetupError(resp->mutable_error(), MasterErrorPB::INVALID_REQUEST, s);
+  }
+
+  scoped_refptr<UniverseReplicationInfo> universe;
+  {
+    std::shared_lock<LockType> l(lock_);
+
+    universe = FindPtrOrNull(universe_replication_map_, req->producer_id());
+    if (universe == nullptr) {
+      Status s = STATUS(NotFound, "Could not find CDC producer universe", req->DebugString());
+      return SetupError(resp->mutable_error(), MasterErrorPB::OBJECT_NOT_FOUND, s);
+    }
+  }
+
+  // Update the Master's Universe Config with the new state.
+  {
+    auto l = universe->LockForWrite();
+    if (l->data().pb.state() != SysUniverseReplicationEntryPB::DISABLED &&
+        l->data().pb.state() != SysUniverseReplicationEntryPB::ACTIVE) {
+      Status s = STATUS(InvalidArgument,
+          Format("Universe Replication in invalid state: $0.  Retry or Delete.",
+              SysUniverseReplicationEntryPB::State_Name(l->data().pb.state())),
+          req->DebugString());
+      return SetupError(resp->mutable_error(), MasterErrorPB::INVALID_REQUEST, s);
+    }
+    if (req->is_enabled()) {
+        l->mutable_data()->pb.set_state(SysUniverseReplicationEntryPB::ACTIVE);
+    } else { // DISABLE.
+        l->mutable_data()->pb.set_state(SysUniverseReplicationEntryPB::DISABLED);
+    }
+    RETURN_NOT_OK(sys_catalog_->UpdateItem(universe.get(), leader_ready_term_));
+    l->Commit();
+  }
+
+  // Modify the Consumer Registry, which will fan out this info to all TServers on heartbeat.
+  {
+    auto l = cluster_config_->LockForWrite();
+    auto producer_map = l->mutable_data()->pb.mutable_consumer_registry()->mutable_producer_map();
+    auto it = producer_map->find(req->producer_id());
+    if (it == producer_map->end()) {
+      LOG(WARNING) << "Valid Producer Universe not in Consumer Registry: " << req->producer_id();
+      Status s = STATUS(NotFound, "Could not find CDC producer universe", req->DebugString());
+      return SetupError(resp->mutable_error(), MasterErrorPB::OBJECT_NOT_FOUND, s);
+    }
+    (*it).second.set_disable_stream(!req->is_enabled());
+    l->mutable_data()->pb.set_version(l->mutable_data()->pb.version() + 1);
+    RETURN_NOT_OK(sys_catalog_->UpdateItem(cluster_config_.get(), leader_ready_term_));
+    l->Commit();
+  }
+
+  return Status::OK();
 }
 
 Status CatalogManager::GetUniverseReplication(const GetUniverseReplicationRequestPB* req,
@@ -2105,13 +2170,7 @@ Status CatalogManager::GetUniverseReplication(const GetUniverseReplicationReques
   }
 
   auto l = universe->LockForRead();
-  resp->set_producer_id(l->data().pb.producer_id());
-  resp->mutable_producer_master_addresses()->CopyFrom(l->data().pb.producer_master_addresses());
-  resp->mutable_producer_tables()->Reserve(l->data().pb.tables().size());
-  for (const auto& table : l->data().pb.tables()) {
-    auto* t = resp->add_producer_tables();
-    t->set_table_id(table);
-  }
+  resp->mutable_entry()->CopyFrom(l->data().pb);
   return Status::OK();
 }
 

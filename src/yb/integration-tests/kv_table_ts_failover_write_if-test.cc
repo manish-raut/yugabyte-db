@@ -20,6 +20,8 @@
 #include "yb/client/table_creator.h"
 #include "yb/client/yb_op.h"
 
+#include "yb/common/ql_value.h"
+
 #include "yb/integration-tests/cluster_itest_util.h"
 #include "yb/integration-tests/cluster_verifier.h"
 #include "yb/integration-tests/external_mini_cluster.h"
@@ -150,7 +152,9 @@ class KVTableTsFailoverWriteIfTest : public integration_tests::YBTableTestBase {
 
   void CreateTable() override {
     if (!table_exists_) {
-      ASSERT_OK(client_->CreateNamespaceIfNotExists(table_name().namespace_name()));
+      const auto table = table_name();
+      ASSERT_OK(client_->CreateNamespaceIfNotExists(table.namespace_name(),
+                                                    table.namespace_type()));
 
       YBSchemaBuilder b;
       b.AddColumn(kKeyColumnName)->Type(INT32)->NotNull()->HashPrimaryKey();

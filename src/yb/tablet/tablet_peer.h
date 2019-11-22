@@ -42,8 +42,8 @@
 #include <vector>
 
 #include "yb/consensus/consensus_fwd.h"
+#include "yb/consensus/consensus_context.h"
 #include "yb/consensus/consensus_meta.h"
-#include "yb/consensus/consensus_types.h"
 #include "yb/consensus/log.h"
 #include "yb/gutil/callback.h"
 #include "yb/gutil/ref_counted.h"
@@ -92,7 +92,7 @@ class Operation;
 // state machine through a consensus algorithm, which makes sure that other
 // peers see the same updates in the same order. In addition to this, this
 // class also splits the work and coordinates multi-threaded execution.
-class TabletPeer : public consensus::ReplicaOperationFactory,
+class TabletPeer : public consensus::ConsensusContext,
                    public TransactionParticipantContext,
                    public TransactionCoordinatorContext,
                    public WriteOperationContext {
@@ -103,7 +103,8 @@ class TabletPeer : public consensus::ReplicaOperationFactory,
              const consensus::RaftPeerPB& local_peer_pb,
              const scoped_refptr<server::Clock> &clock,
              const std::string& permanent_uuid,
-             Callback<void(std::shared_ptr<StateChangeContext> context)> mark_dirty_clbk);
+             Callback<void(std::shared_ptr<StateChangeContext> context)> mark_dirty_clbk,
+             MetricRegistry* metric_registry);
 
   ~TabletPeer();
 
@@ -129,9 +130,9 @@ class TabletPeer : public consensus::ReplicaOperationFactory,
   // Returns true if shutdown was just initiated, false if shutdown was already running.
   MUST_USE_RESULT bool StartShutdown();
   // Completes shutdown process and waits for it's completeness.
-  void CompleteShutdown();
+  void CompleteShutdown(IsDropTable is_drop_table = IsDropTable::kFalse);
 
-  void Shutdown();
+  void Shutdown(IsDropTable is_drop_table = IsDropTable::kFalse);
 
   // Check that the tablet is in a RUNNING state.
   CHECKED_STATUS CheckRunning() const;
@@ -174,7 +175,7 @@ class TabletPeer : public consensus::ReplicaOperationFactory,
       const scoped_refptr<consensus::ConsensusRound>& round,
       HybridTime propagated_safe_time) override;
 
-  // This is an override of a ReplicaOperationFactory method. This is called from
+  // This is an override of a ConsensusContext method. This is called from
   // UpdateReplica -> EnqueuePreparesUnlocked on Raft heartbeats.
   void SetPropagatedSafeTime(HybridTime ht) override;
 
@@ -182,6 +183,7 @@ class TabletPeer : public consensus::ReplicaOperationFactory,
   bool ShouldApplyWrite() override;
 
   consensus::Consensus* consensus() const;
+  consensus::RaftConsensus* raft_consensus() const;
 
   std::shared_ptr<consensus::Consensus> shared_consensus() const;
 
@@ -286,7 +288,7 @@ class TabletPeer : public consensus::ReplicaOperationFactory,
   }
 
   int64_t LeaderTerm() const override;
-  consensus::LeaderStatus LeaderStatus() const;
+  consensus::LeaderStatus LeaderStatus(bool allow_stale = false) const;
 
   HybridTime HtLeaseExpiration() const override;
 
@@ -334,6 +336,9 @@ class TabletPeer : public consensus::ReplicaOperationFactory,
   // Return the total on-disk size of this tablet replica, in bytes.
   // Caller should hold the lock_.
   uint64_t OnDiskSize() const;
+
+  // Returns the number of segments in log_.
+  int GetNumLogSegments() const;
 
   std::string LogPrefix() const;
 
@@ -420,6 +425,14 @@ class TabletPeer : public consensus::ReplicaOperationFactory,
 
  private:
   HybridTime ReportReadRestart() override;
+
+  HybridTime HybridTimeLease(MicrosTime min_allowed, CoarseTimePoint deadline);
+  HybridTime PropagatedSafeTime() override;
+  void MajorityReplicated() override;
+  void ChangeConfigReplicated(const consensus::RaftConfigPB& config) override;
+  uint64_t NumSSTFiles() override;
+
+  MetricRegistry* metric_registry_;
 
   bool IsLeader() override {
     return LeaderTerm() != OpId::kUnknownTerm;

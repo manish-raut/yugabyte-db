@@ -143,7 +143,13 @@ preprocess_targetlist(PlannerInfo *root)
 
 		if (rc->allMarkTypes & ~(1 << ROW_MARK_COPY))
 		{
-			if (target_relation && IsYBBackedRelation(target_relation)) 
+			bool is_yb_relation = false;
+			if (!target_relation)
+				is_yb_relation = IsYBRelationById(getrelid(rc->rti, range_table));
+			else
+				is_yb_relation = IsYBBackedRelation(target_relation);
+
+			if (is_yb_relation)
 			{
 				/* Need to fetch YB TID */
 				var = makeVar(rc->rti,
@@ -153,8 +159,8 @@ preprocess_targetlist(PlannerInfo *root)
 								InvalidOid,
 								0);
 				snprintf(resname, sizeof(resname), "ybctid%u", rc->rowmarkId);
-			} 
-			else 
+			}
+			else
 			{
 				/* Need to fetch TID */
 				var = makeVar(rc->rti,
@@ -395,13 +401,26 @@ expand_targetlist(List *tlist, int command_type,
 					// This case is added only for DELETE from YugaByte table with RETURNING clause.
 					if (IsYugaByteEnabled())
 					{
-						// Query all attribute in the YugaByte relation.
-						new_expr = (Node *) makeVar(result_relation,
-													attrno,
-													atttype,
-													atttypmod,
-													attcollation,
-													0);
+						if (att_tup->attisdropped) {
+						/* Insert NULL for dropped column */
+							new_expr = (Node *) makeConst(INT4OID,
+														  -1,
+														  InvalidOid,
+														  sizeof(int32),
+														  (Datum) 0,
+														  true, /* isnull */
+														  true /* byval */ );
+						}
+						else 
+						{
+							// Query all attribute in the YugaByte relation.
+							new_expr = (Node *) makeVar(result_relation,
+														attrno,
+														atttype,
+														atttypmod,
+														attcollation,
+														0);
+						}
 						break;
 					}
 					/* FALLTHROUGH */

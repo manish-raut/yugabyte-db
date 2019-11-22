@@ -19,35 +19,43 @@ isTocNested: false
 showAsideToc: true
 ---
 
-After [creating a local cluster](../create-local-cluster/), follow the instructions here to explore Yugabyte DB's PostgreSQL-compatible [YSQL](../../api/ysql/) API.
+After [creating a local cluster](../create-local-cluster/), follow the steps here to explore YugabyteDB's PostgreSQL-compatible [YSQL](../../api/ysql/) API.
 
-## 1. Load data
+## 1. Load sample data
 
-- Download the sample schema.
+Follow the steps to create a database and load sample data.
 
-```sh
-$ wget https://raw.githubusercontent.com/yugabyte/yb-sql-workshop/master/query-using-bi-tools/schema.sql
-```
+1. Download the sample schema using the following `curl` command.
 
--  Download the sample data
+    ```sh
+    $ wget https://raw.githubusercontent.com/yugabyte/yb-sql-workshop/master/query-using-bi-tools/schema.sql
+    ```
 
-```sh
-$ wget https://github.com/yugabyte/yb-sql-workshop/raw/master/query-using-bi-tools/sample-data.tgz
-```
+2. Download the sample data archive by running the following `curl` command.
 
-```sh
-$ tar zxvf sample-data.tgz
-```
+    ```sh
+    $ wget https://github.com/yugabyte/yb-sql-workshop/raw/master/query-using-bi-tools/sample-data.tgz
+    ```
 
-```sh
-$ ls data/
-```
+3. Unpack the `sample-data.tgz` file running the following `tar` command.
 
-```
-orders.sql  products.sql  reviews.sql users.sql
-```
+    ```sh
+    $ tar zxvf sample-data.tgz
+    ```
 
-- Connect using ysqlsh, the Yugabyte SQL shell
+    Four SQL script files are added to the `data` directory that is created. You can verify the files are available by entering the following `ls` command.
+
+    ```sh
+    $ ls data/
+    ```
+
+    You should see the following filenames displayed.
+
+    ```
+    orders.sql  products.sql  reviews.sql users.sql
+    ```
+
+4. Open the YSQL command line by using the following `ysqlsh` command.
 
 <ul class="nav nav-tabs nav-tabs-yb">
   <li >
@@ -91,70 +99,76 @@ orders.sql  products.sql  reviews.sql users.sql
   </div>
 </div>
 
-- Create a database.
+1. Create a database named `yb_demo` by using the following `CREATE DATABASE` command.
 
-```sql
-yugabyte=> CREATE DATABASE yb_demo;
-```
+    ```postgresql
+    yugabyte=# CREATE DATABASE yb_demo;
+    ```
 
-```sql
-yugabyte=> \c yb_demo;
-```
+2. Connect to the new database using the following YSQL `\c` meta command.
 
-- Insert sample data
+    ```sql
+    yugabyte=# \c yb_demo;
+    ```
 
-First create the 4 tables necessary to store the data.
+3. Create the database schema, which includes four tables, by running the following `\i` meta command.
 
-```sql
-yb_demo=> \i 'schema.sql';
-```
+    ```sql
+    yb_demo=# \i 'schema.sql';
+    ```
 
-Now load the data into the tables.
+4. Load the data into the tables by running the following four `\i` commands.
 
-```sql
-yb_demo=> \i 'data/products.sql'
-```
+    ```sql
+    yb_demo=# \i 'data/products.sql'
+    ```
 
-```sql
-yb_demo=> \i 'data/users.sql'
-```
+    ```sql
+    yb_demo=# \i 'data/users.sql'
+    ```
 
-```sql
-yb_demo=> \i 'data/orders.sql'
-```
+    ```sql
+    yb_demo=# \i 'data/orders.sql'
+    ```
 
-```sql
-yb_demo=> \i 'data/reviews.sql'
-```
+    ```sql
+    yb_demo=# \i 'data/reviews.sql'
+    ```
+
+    You now have sample data and are ready to begin exploring YSQL in YugabyteDB.
 
 ## 2. Simple queries
 
 Lets us look at the schema of the `products` table. You can do this as follows:
 
 ```sql
-yb_demo=> \d products
+yb_demo=# \d products
 ```
 
-You should see an output which looks like the following:
+You should see an output like the following:
 
 ```
-                    Table "public.products"
-   Column   |            Type             | Collation | Nullable |               Default
+                                        Table "public.products"
+   Column   |            Type             | Collation | Nullable |               Default                
 ------------+-----------------------------+-----------+----------+--------------------------------------
  id         | bigint                      |           | not null | nextval('products_id_seq'::regclass)
- created_at | timestamp without time zone |           |          |
- category   | text                        |           |          |
- ean        | text                        |           |          |
- price      | double precision            |           |          |
+ created_at | timestamp without time zone |           |          | 
+ category   | text                        |           |          | 
+ ean        | text                        |           |          | 
+ price      | double precision            |           |          | 
  quantity   | integer                     |           |          | 5000
- rating     | double precision            |           |          |
- title      | text                        |           |          |
- vendor     | text                        |           |          |
+ rating     | double precision            |           |          | 
+ title      | text                        |           |          | 
+ vendor     | text                        |           |          | 
+Indexes:
+    "products_pkey" PRIMARY KEY, lsm (id HASH)
+
 ```
 
 To see how many products there are in this table, you can run the following query.
-```sql
-yb_demo=> SELECT count(*) FROM products;
+
+```postgresql
+yb_demo=# SELECT count(*) FROM products;
 ```
 
 You should see an output which looks like the following:
@@ -168,13 +182,13 @@ You should see an output which looks like the following:
 
 Now let us run a query to select the `id`, `title`, `category` and `price` columns for the first five products.
 
-```sql
-yb_demo=> SELECT id, title, category, price, rating
+```postgresql
+yb_demo=# SELECT id, title, category, price, rating
           FROM products
           LIMIT 5;
 ```
 
-You should see an output which looks like the following:
+You should see an output like the following:
 
 ```
  id  |           title            | category |      price       | rating
@@ -189,8 +203,8 @@ You should see an output which looks like the following:
 
 To view the next 3 products, we simply add an `OFFSET 5` clause to start from the fifth product.
 
-```sql
-yb_demo=> SELECT id, title, category, price, rating
+```postgresql
+yb_demo=# SELECT id, title, category, price, rating
           FROM products
           LIMIT 3 OFFSET 5;
 ```
@@ -212,8 +226,8 @@ A JOIN clause is used to combine rows from two or more tables, based on a relate
 
 From the `orders` table, we are going to select the `total` column that represents the total amount the user paid. For each of these orders, we are going to fetch the `id`, the `name` and the `email` from the `users` table of the corresponding users that placed those orders. The related column between the two tables is the user's id. This can be expressed as the following join query:
 
-```sql
-yb_demo=> SELECT users.id, users.name, users.email, orders.id, orders.total
+```postgresql
+yb_demo=# SELECT users.id, users.name, users.email, orders.id, orders.total
           FROM orders INNER JOIN users ON orders.user_id=users.id
           LIMIT 10;
 ```
@@ -243,8 +257,8 @@ Imagine the user with id `1` wants to order for `10` units of the product with i
 
 Before running the transaction, we can verify that we have `5000` units of product `2` in stock by running the following query:
 
-```sql
-yb_demo=> SELECT id, category, price, quantity FROM products WHERE id=2;
+```postgresql
+yb_demo=# SELECT id, category, price, quantity FROM products WHERE id=2;
 ```
 
 ```
@@ -255,11 +269,10 @@ SELECT id, category, price, quantity FROM products WHERE id=2;
 (1 row)
 ```
 
-
 Now, to place the order, we can run the following transaction:
 
-```sql
-yb_demo=> BEGIN TRANSACTION;
+```postgresql
+yb_demo=# BEGIN TRANSACTION;
 
 /* First insert a new order into the orders table. */
 INSERT INTO orders
@@ -284,9 +297,10 @@ COMMIT;
 
 We can verify that the order got inserted by running the following:
 
-```sql
-yb_demo=> select * from orders where id = (select max(id) from orders);
+```postgresql
+yb_demo=# select * from orders where id = (select max(id) from orders);
 ```
+
 ```
 select * from orders where id = (select max(id) from orders);
   id   |        created_at         | user_id | product_id | discount | quantity |     subtotal     | tax |      total
@@ -297,11 +311,11 @@ select * from orders where id = (select max(id) from orders);
 
 We can also verify that total quantity of product id `2` in the inventory is `4990` by running the following query.
 
-```sql
+```postgresql
 yb_demo=# SELECT id, category, price, quantity FROM products WHERE id=2;
 ```
 
-```sql
+```
 SELECT id, category, price, quantity FROM products WHERE id=2;
  id | category  |      price       | quantity
 ----+-----------+------------------+----------
@@ -317,8 +331,8 @@ YSQL supports a rich set of built-in functions. In this example, we will look at
 
 To answer this question, we should list the unique set of `source` channels present in the database. This can be achieved as follows:
 
-```sql
-yb_demo=> SELECT DISTINCT(source) FROM users;
+```postgresql
+yb_demo=# SELECT DISTINCT(source) FROM users;
 ```
 
 ```
@@ -334,8 +348,8 @@ source
 
 - What is the min, max and average price of products in the store?
 
-```sql
-yb_demo=> SELECT MIN(price), MAX(price), AVG(price) FROM products;
+```postgresql
+yb_demo=# SELECT MIN(price), MAX(price), AVG(price) FROM products;
 ```
 
 ```
@@ -349,10 +363,10 @@ min               |       max        |       avg
 
 The `GROUP BY` clause is commonly used to perform aggregations. Below are a couple of examples of using these to answer some types of questions about the data.
 
--  What is the most effective channel for user signups?
+- What is the most effective channel for user signups?
 
-```sql
-yb_demo=> SELECT source, count(*) AS num_user_signups
+```postgresql
+yb_demo=# SELECT source, count(*) AS num_user_signups
           FROM users
           GROUP BY source
           ORDER BY num_user_signups DESC;
@@ -371,8 +385,8 @@ source     | num_user_signups
 
 - What are the most effective channels for product sales by revenue?
 
-```sql
-yb_demo=> SELECT source, ROUND(SUM(orders.total)) AS total_sales
+```postgresql
+yb_demo=# SELECT source, ROUND(SUM(orders.total)) AS total_sales
           FROM users, orders WHERE users.id=orders.user_id
           GROUP BY source
           ORDER BY total_sales DESC;
@@ -393,10 +407,10 @@ source     | total_sales
 
 Let us answer the questions below by creating a view.
 
--  What percentage of the total sales is from the Facebook channel?
+- What percentage of the total sales is from the Facebook channel?
 
-```sql
-yb_demo=> CREATE VIEW channel AS
+```postgresql
+yb_demo=# CREATE VIEW channel AS
             (SELECT source, ROUND(SUM(orders.total)) AS total_sales
              FROM users, orders
              WHERE users.id=orders.user_id
@@ -406,42 +420,46 @@ yb_demo=> CREATE VIEW channel AS
 
 Now that the view is created, we can see it in our list of relations.
 
-```sql
-yb_demo=> \d
+```postgresql
+yb_demo=# \d
 ```
 
 ```
-List of relations
- Schema |   Name   | Type  |  Owner
---------+----------+-------+----------
- public | channel  | view  | postgres
- public | orders   | table | postgres
- public | products | table | postgres
- public | reviews  | table | postgres
- public | users    | table | postgres
-(5 rows)
+               List of relations
+ Schema |      Name       |   Type   |  Owner
+--------+-----------------+----------+----------
+ public | channel         | view     | yugabyte
+ public | orders          | table    | yugabyte
+ public | orders_id_seq   | sequence | yugabyte
+ public | products        | table    | yugabyte
+ public | products_id_seq | sequence | yugabyte
+ public | reviews         | table    | yugabyte
+ public | reviews_id_seq  | sequence | yugabyte
+ public | users           | table    | yugabyte
+ public | users_id_seq    | sequence | yugabyte
+(9 rows)
 ```
 
-```sql
-yb_demo=> SELECT source, 
+```postgresql
+yb_demo=# SELECT source, 
             total_sales * 100.0 / (SELECT SUM(total_sales) FROM channel) AS percent_sales
           FROM channel
           WHERE source='Facebook';
 ```
 
 ```
-source    |  percent_sales
+  source  |  percent_sales
 ----------+------------------
- Facebook | 20.9018954710909
+ Facebook | 20.8927150492159
 (1 row)
 ```
 
 <!--
-## 8. Secondary Indexes
+## 8. Secondary indexes
 
 Coming soon.
 
-## 9. JSONB Column Type
+## 9. JSONB column type
 
 Coming soon.
 -->

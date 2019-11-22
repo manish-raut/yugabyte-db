@@ -35,22 +35,12 @@ void LibPqTestBase::SetUp() {
   PgWrapperTestBase::SetUp();
 }
 
-Result<PGConnPtr> LibPqTestBase::Connect() {
-  auto start = CoarseMonoClock::now();
-  auto deadline = start + 60s;
-  for (;;) {
-    PGConnPtr result(PQconnectdb(Format(
-        "host=$0 port=$1 user=postgres", pg_ts->bind_host(), pg_ts->pgsql_rpc_port()).c_str()));
-    auto status = PQstatus(result.get());
-    if (status == ConnStatusType::CONNECTION_OK) {
-      return result;
-    }
-    auto now = CoarseMonoClock::now();
-    if (now >= deadline) {
-      return STATUS_FORMAT(NetworkError, "Connect failed: $0, passed: $1",
-                           status, MonoDelta(now - start));
-    }
-  }
+Result<PGConn> LibPqTestBase::Connect() {
+  return PGConn::Connect(HostPort(pg_ts->bind_host(), pg_ts->pgsql_rpc_port()));
+}
+
+Result<PGConn> LibPqTestBase::ConnectToDB(const string& db_name) {
+  return PGConn::Connect(HostPort(pg_ts->bind_host(), pg_ts->pgsql_rpc_port()), db_name);
 }
 
 bool LibPqTestBase::TransactionalFailure(const Status& status) {

@@ -100,7 +100,7 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
     const RaftPeerPB& local_peer_pb,
     const scoped_refptr<MetricEntity>& metric_entity,
     const scoped_refptr<server::Clock>& clock,
-    ReplicaOperationFactory* operation_factory,
+    ConsensusContext* consensus_context,
     rpc::Messenger* messenger,
     rpc::ProxyCache* proxy_cache,
     const scoped_refptr<log::Log>& log,
@@ -114,14 +114,14 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   RaftConsensus(
     const ConsensusOptions& options,
     std::unique_ptr<ConsensusMetadata> cmeta,
-    gscoped_ptr<PeerProxyFactory> peer_proxy_factory,
-    gscoped_ptr<PeerMessageQueue> queue,
-    gscoped_ptr<PeerManager> peer_manager,
+    std::unique_ptr<PeerProxyFactory> peer_proxy_factory,
+    std::unique_ptr<PeerMessageQueue> queue,
+    std::unique_ptr<PeerManager> peer_manager,
     std::unique_ptr<ThreadPoolToken> raft_pool_token,
     const scoped_refptr<MetricEntity>& metric_entity,
     const std::string& peer_uuid,
     const scoped_refptr<server::Clock>& clock,
-    ReplicaOperationFactory* operation_factory,
+    ConsensusContext* consensus_context,
     const scoped_refptr<log::Log>& log,
     std::shared_ptr<MemTracker> parent_mem_tracker,
     Callback<void(std::shared_ptr<StateChangeContext> context)> mark_dirty_clbk,
@@ -167,7 +167,7 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
 
   RaftPeerPB::Role role() const override;
 
-  LeaderState GetLeaderState() const override;
+  LeaderState GetLeaderState(bool allow_stale = false) const override;
 
   std::string peer_uuid() const override;
 
@@ -225,11 +225,6 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   // The on-disk size of the consensus metadata.
   uint64_t OnDiskSize() const;
 
-  // Set a function returning the current safe time, so we can send it from leaders to followers.
-  void SetPropagatedSafeTimeProvider(std::function<HybridTime()> provider);
-
-  void SetMajorityReplicatedListener(std::function<void()> updater);
-
   yb::OpId MinRetryableRequestOpId();
 
   CHECKED_STATUS StartElection(const LeaderElectionData& data) override {
@@ -249,7 +244,17 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
     TEST_delay_update_.store(duration, std::memory_order_release);
   }
 
-  CHECKED_STATUS ReadReplicatedMessagesForCDC(const OpId& from, ReplicateMsgs* msgs) override;
+  Result<ReadOpsResult> ReadReplicatedMessagesForCDC(const yb::OpId& from,
+    int64_t* last_replicated_opid_index) override;
+
+  void UpdateCDCConsumerOpId(const yb::OpId& op_id) override;
+
+  // Start memory tracking of following operation in case it is still present in our caches.
+  void TrackOperationMemory(const yb::OpId& op_id);
+
+  uint64_t MajorityNumSSTFiles() const {
+    return majority_num_sst_files_.load(std::memory_order_acquire);
+  }
 
  protected:
   // Trigger that a non-Operation ConsensusRound has finished replication.
@@ -602,14 +607,14 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
 
   scoped_refptr<log::Log> log_;
   scoped_refptr<server::Clock> clock_;
-  gscoped_ptr<PeerProxyFactory> peer_proxy_factory_;
+  std::unique_ptr<PeerProxyFactory> peer_proxy_factory_;
 
-  gscoped_ptr<PeerManager> peer_manager_;
+  std::unique_ptr<PeerManager> peer_manager_;
 
   // The queue of messages that must be sent to peers.
-  gscoped_ptr<PeerMessageQueue> queue_;
+  std::unique_ptr<PeerMessageQueue> queue_;
 
-  gscoped_ptr<ReplicaState> state_;
+  std::unique_ptr<ReplicaState> state_;
 
   Random rng_;
 
@@ -658,11 +663,6 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   std::mutex leader_lease_wait_mtx_;
   std::condition_variable leader_lease_wait_cond_;
 
-  // This is called every time majority-replicated watermarks (OpId / leader leases) change. This is
-  // used for updating the "propagated safe time" value in MvccManager and unblocking readers
-  // waiting for it to advance.
-  std::function<void()> majority_replicated_listener_;
-
   scoped_refptr<Histogram> update_raft_config_dns_latency_;
 
   // Used only when follower_reject_update_consensus_requests_seconds is greater than 0.
@@ -674,6 +674,8 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   CoarseTimePoint disable_pre_elections_until_ = CoarseTimePoint::min();
 
   std::atomic<MonoDelta> TEST_delay_update_{MonoDelta::kZero};
+
+  std::atomic<uint64_t> majority_num_sst_files_{0};
 
   DISALLOW_COPY_AND_ASSIGN(RaftConsensus);
 };

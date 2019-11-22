@@ -60,7 +60,6 @@ class HostPort;
 namespace master {
 class AlterTableRequestPB;
 class CreateTableRequestPB;
-class GetLeaderMasterRpc;
 class MasterServiceProxy;
 } // namespace master
 
@@ -85,6 +84,10 @@ class YBClient::Data {
                                  const std::set<std::string>& blacklist,
                                  std::vector<internal::RemoteTabletServer*>* candidates,
                                  internal::RemoteTabletServer** ts);
+
+  CHECKED_STATUS AlterNamespace(YBClient* client,
+                                const master::AlterNamespaceRequestPB& req,
+                                CoarseTimePoint deadline);
 
   CHECKED_STATUS CreateTable(YBClient* client,
                              const master::CreateTableRequestPB& req,
@@ -289,6 +292,8 @@ class YBClient::Data {
   // can either be a single 'host:port' or a comma separated list of 'host1:port1,host2:port2,...'.
   std::vector<std::string> master_server_addrs_;
   mutable simple_spinlock master_server_addrs_lock_;
+
+  bool skip_master_flagfile_ = false;
 
   MonoDelta default_admin_operation_timeout_;
   MonoDelta default_rpc_timeout_;

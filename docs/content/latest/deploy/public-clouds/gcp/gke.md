@@ -14,18 +14,17 @@ $ gcloud components install kubectl
 
 - Configure defaults for gcloud
 
-Set the project id as `yugabyte`. You can change this as per your need.
+Set the project ID as `yugabyte`. You can change this as per your need.
 
 ```sh
 $ gcloud config set project yugabyte
 ```
 
-Set the defaut compute zone as `us-west1-b`. You can change this as per your need.
+Set the default compute zone as `us-west1-b`. You can change this as per your need.
 
 ```sh
 $ gcloud config set compute/zone us-west1-b
 ```
-
 
 ## 1. Create a GKE cluster
 
@@ -35,10 +34,9 @@ Create a Kubernetes cluster if you have not already done so by running the follo
 $ gcloud container clusters create yugabyte
 ```
 
+## 2. Create a YugabyteDB cluster
 
-## 2. Create a Yugabyte DB cluster
-
-Create a Yugabyte DB cluster by running the following.
+Create a YugabyteDB cluster by running the following.
 
 ```sh
 $ kubectl create -f https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/cloud/kubernetes/yugabyte-statefulset.yaml
@@ -118,7 +116,7 @@ system_schema  system_auth  system
 
 ## 5. Destroy cluster (optional)
 
-Destroy the Yugabyte DB cluster we created above by running the following.
+Destroy the YugabyteDB cluster we created above by running the following.
 
 ```sh
 $ kubectl delete -f https://raw.githubusercontent.com/yugabyte/yugabyte-db/master/cloud/kubernetes/yugabyte-statefulset.yaml

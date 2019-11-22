@@ -59,6 +59,10 @@ bool YBSession::IsRestartRequired() {
   return rp && rp->IsRestartRequired();
 }
 
+void YBSession::DeferReadPoint() {
+  read_point_->Defer();
+}
+
 void YBSession::SetTransaction(YBTransactionPtr transaction) {
   transaction_ = std::move(transaction);
   internal::BatcherPtr old_batcher;
@@ -69,11 +73,11 @@ void YBSession::SetTransaction(YBTransactionPtr transaction) {
   }
 }
 
-void YBSession::SetMemoryLimitScore(double score) {
-  memory_limit_score_ = score;
+void YBSession::SetRejectionScoreSource(RejectionScoreSourcePtr rejection_score_source) {
   if (batcher_) {
-    batcher_->SetMemoryLimitScore(score);
+    batcher_->SetRejectionScoreSource(rejection_score_source);
   }
+  rejection_score_source_ = std::move(rejection_score_source);
 }
 
 YBSession::~YBSession() {
@@ -186,7 +190,7 @@ internal::Batcher& YBSession::Batcher() {
     if (timeout_.Initialized()) {
       batcher_->SetTimeout(timeout_);
     }
-    batcher_->SetMemoryLimitScore(memory_limit_score_);
+    batcher_->SetRejectionScoreSource(rejection_score_source_);
   }
   return *batcher_;
 }

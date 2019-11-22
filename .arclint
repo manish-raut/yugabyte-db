@@ -6,7 +6,8 @@
      "(\\.sql$)",
      "(\\.txt$)",
      "(^src/postgres/.*$)",
-     "(^[.]gitmodules$)"
+     "(^[.]gitmodules$)",
+     "(^managed/src/main/resources/v1.routes$)"
   ],
   "linters": {
     "text": {
@@ -19,12 +20,14 @@
         "(^cmake_modules/FindBoost[.]cmake$)",
         "(^README[.]md$)",
         "(^java/pom[.]xml$)",
-        "(^.*[.]patch$)"
+        "(^.*[.]patch$)",
+        "(java/yb-cdc/pom.xml)",
+        "(java/yb-cdc/README.md)"
       ]
     },
     "pycodestyle": {
       "type": "pep8",
-      "include": "(\\.py$|yb-ctl$)",
+      "include": "(\\.py$)",
       "exclude": "(^thirdparty/|^[.]ycm_extra_conf[.]py$)",
       "bin": "pycodestyle"
     },

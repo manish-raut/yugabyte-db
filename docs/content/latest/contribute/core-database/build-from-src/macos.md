@@ -1,7 +1,7 @@
 
 ## Install necessary packages
 
-First install [Homebrew](https://brew`bash/) in case you do not already have it. We will use this to install the other required packages.
+First install [Homebrew](https://brew.sh/) in case you do not already have it. We will use this to install the other required packages.
 
 ```sh
 /usr/bin/ruby -e "$(
@@ -17,5 +17,5 @@ brew install autoconf automake bash bison ccache cmake  \
 ```
 
 {{< note title="Note on bash" >}}
-Yugabyte DB build scripts rely on Bash 4. Make sure that which bash outputs `/usr/local/bin/bash` before proceeding. You may need to put `/usr/local/bin` as the first directory on PATH in your `~/.bashrc` to achieve that.
+YugabyteDB build scripts rely on Bash 4. Make sure that which bash outputs `/usr/local/bin/bash` before proceeding. You may need to put `/usr/local/bin` as the first directory on PATH in your `~/.bashrc` to achieve that.
 {{< /note >}}

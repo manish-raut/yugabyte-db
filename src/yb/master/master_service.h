@@ -100,6 +100,9 @@ class MasterServiceImpl : public MasterServiceIf,
   void DeleteNamespace(const DeleteNamespaceRequestPB* req,
                        DeleteNamespaceResponsePB* resp,
                        rpc::RpcContext rpc) override;
+  void AlterNamespace(const AlterNamespaceRequestPB* req,
+                      AlterNamespaceResponsePB* resp,
+                      rpc::RpcContext rpc) override;
   void ListNamespaces(const ListNamespacesRequestPB* req,
                       ListNamespacesResponsePB* resp,
                       rpc::RpcContext rpc) override;
@@ -204,6 +207,10 @@ class MasterServiceImpl : public MasterServiceIf,
                              GetLoadMovePercentResponsePB* resp,
                              rpc::RpcContext rpc) override;
 
+  void GetLeaderBlacklistCompletion(const GetLeaderBlacklistPercentRequestPB* req,
+                             GetLoadMovePercentResponsePB* resp,
+                             rpc::RpcContext rpc) override;
+
   void IsMasterLeaderServiceReady(const IsMasterLeaderReadyRequestPB* req,
                                   IsMasterLeaderReadyResponsePB* resp,
                                   rpc::RpcContext rpc) override;
@@ -240,6 +247,18 @@ class MasterServiceImpl : public MasterServiceIf,
                            IsEncryptionEnabledResponsePB* resp,
                            rpc::RpcContext rpc) override;
 
+  void GetUniverseKeyRegistry(const GetUniverseKeyRegistryRequestPB* req,
+                              GetUniverseKeyRegistryResponsePB* resp,
+                              rpc::RpcContext rpc) override;
+
+  void AddUniverseKeys(const AddUniverseKeysRequestPB* req,
+                       AddUniverseKeysResponsePB* resp,
+                       rpc::RpcContext rpc) override;
+
+  void HasUniverseKeyInMemory(const HasUniverseKeyInMemoryRequestPB* req,
+                              HasUniverseKeyInMemoryResponsePB* resp,
+                              rpc::RpcContext rpc) override;
+
   void SetupUniverseReplication(const SetupUniverseReplicationRequestPB* req,
                                 SetupUniverseReplicationResponsePB* resp,
                                 rpc::RpcContext rpc) override;
@@ -247,6 +266,10 @@ class MasterServiceImpl : public MasterServiceIf,
   void DeleteUniverseReplication(const DeleteUniverseReplicationRequestPB* req,
                                  DeleteUniverseReplicationResponsePB* resp,
                                  rpc::RpcContext rpc) override;
+
+  void SetUniverseReplicationEnabled(const SetUniverseReplicationEnabledRequestPB* req,
+                                     SetUniverseReplicationEnabledResponsePB* resp,
+                                     rpc::RpcContext rpc) override;
 
   void GetUniverseReplication(const GetUniverseReplicationRequestPB* req,
                               GetUniverseReplicationResponsePB* resp,

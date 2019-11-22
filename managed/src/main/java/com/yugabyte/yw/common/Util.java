@@ -16,6 +16,8 @@ import com.yugabyte.yw.models.helpers.NodeDetails;
 import java.io.IOException;
 
 import java.net.InetSocketAddress;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -137,7 +139,7 @@ public class Util {
     }
     return toBeAddedAzUUIDToNumNodes;
   }
-  
+
   /**
    * Create a custom node prefix name from the given parameters.
    * @param  custId customer id owing the universe.
@@ -190,8 +192,8 @@ public class Util {
   }
 
   /**
-   * API detects if addition of a master to the same AZ of current node makes master quorum get closer to 
-   * satisfying the replication factor requirements.
+   * API detects if addition of a master to the same AZ of current node makes master quorum get
+   * closer to satisfying the replication factor requirements.
    * @param currentNode the node whose AZ is checked.
    * @param nodeDetailsSet collection of nodes in a universe.
    * @param numMastersToBeAdded number of masters to be added.
@@ -286,6 +288,15 @@ public class Util {
       return mapper.readTree(inputString);
     } catch (IOException e) {
       throw new RuntimeException("Shell Response message is not a valid Json.");
+    }
+  }
+
+  public static String buildURL(String host, String endpoint) {
+    try {
+      return new URL("https", host, endpoint).toString();
+    } catch (MalformedURLException e) {
+      LOG.error("Error building request URL", e);
+      return null;
     }
   }
 }

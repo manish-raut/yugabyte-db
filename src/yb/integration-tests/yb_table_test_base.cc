@@ -18,6 +18,8 @@
 #include "yb/client/table_creator.h"
 #include "yb/client/yb_op.h"
 
+#include "yb/common/ql_value.h"
+
 #include "yb/yql/redis/redisserver/redis_parser.h"
 #include "yb/yql/redis/redisserver/redis_constants.h"
 #include "yb/util/curl_util.h"
@@ -39,7 +41,8 @@ using strings::Substitute;
 
 namespace integration_tests {
 
-const YBTableName YBTableTestBase::kDefaultTableName("my_keyspace", "kv-table-test");
+const YBTableName YBTableTestBase::kDefaultTableName(
+    YQL_DATABASE_CQL, "my_keyspace", "kv-table-test");
 
 int YBTableTestBase::num_masters() {
   return kDefaultNumMasters;
@@ -76,6 +79,9 @@ bool YBTableTestBase::use_external_mini_cluster() {
 YBTableTestBase::YBTableTestBase() {
 }
 
+void YBTableTestBase::BeforeCreateTable() {
+}
+
 void YBTableTestBase::SetUp() {
   YBTest::SetUp();
 
@@ -105,6 +111,9 @@ void YBTableTestBase::SetUp() {
   ASSERT_OK(mini_cluster_status);
 
   CreateClient();
+
+  BeforeCreateTable();
+
   CreateTable();
   OpenTable();
 }
@@ -151,9 +160,11 @@ void YBTableTestBase::OpenTable() {
   session_ = NewSession();
 }
 
-void YBTableTestBase::CreateRedisTable(YBTableName table_name) {
+void YBTableTestBase::CreateRedisTable(const YBTableName& table_name) {
+  CHECK(table_name.namespace_type() == YQLDatabase::YQL_DATABASE_REDIS);
+
   ASSERT_OK(client_->CreateNamespaceIfNotExists(table_name.namespace_name(),
-                                                YQLDatabase::YQL_DATABASE_REDIS));
+                                                table_name.namespace_type()));
   ASSERT_OK(NewTableCreator()->table_name(table_name)
                 .table_type(YBTableType::REDIS_TABLE_TYPE)
                 .num_tablets(CalcNumTablets(3))
@@ -161,15 +172,16 @@ void YBTableTestBase::CreateRedisTable(YBTableName table_name) {
 }
 
 void YBTableTestBase::CreateTable() {
+  const auto tn = table_name();
   if (!table_exists_) {
-    ASSERT_OK(client_->CreateNamespaceIfNotExists(table_name().namespace_name()));
+    ASSERT_OK(client_->CreateNamespaceIfNotExists(tn.namespace_name(), tn.namespace_type()));
 
     YBSchemaBuilder b;
     b.AddColumn("k")->Type(BINARY)->NotNull()->HashPrimaryKey();
     b.AddColumn("v")->Type(BINARY)->NotNull();
     ASSERT_OK(b.Build(&schema_));
 
-    ASSERT_OK(NewTableCreator()->table_name(table_name()).schema(&schema_).Create());
+    ASSERT_OK(NewTableCreator()->table_name(tn).schema(&schema_).Create());
     table_exists_ = true;
   }
 }

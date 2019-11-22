@@ -1,7 +1,7 @@
 ---
 title: YSQL
 linkTitle: YSQL
-description: Yugabyte Structured Query Language (YSQL)
+description: YugabyteDB Structured Query Language (YSQL)
 summary: Reference for the YSQL API
 image: /images/section_icons/api/ysql.png
 menu:
@@ -18,7 +18,7 @@ showAsideToc: true
 
 ## Introduction
 
-The Yugabyte Structured Query Language (YSQL) is the distributed SQL API for Yugabyte DB and is compatible with the SQL dialect of PostgreSQL. Currently, YSQL is compatible with PostgreSQL 11.2 version. Yugabyte DB and YSQL are optimized for RDBMS workloads that need horizontal write scalability and global data distribution while also using relational modeling features, such as JOINs, distributed transactions, and referential integrity (such as foreign keys).
+The Yugabyte Structured Query Language (YSQL) is the distributed SQL API for YugabyteDB and is compatible with the SQL dialect of PostgreSQL. Currently, YSQL is compatible with PostgreSQL 11.2 version. YugabyteDB and YSQL are optimized for RDBMS workloads that need horizontal write scalability and global data distribution while also using relational modeling features, such as JOINs, distributed transactions, and referential integrity (such as foreign keys).
 
 The main components of YSQL include the data definition language (DDL), the data manipulation language (DML), and the data control language (DCL). A number of elements are used to construct these components, including data types, database objects, names and qualifiers, expressions, and comments. Other components are also provided for different purposes such as system control, transaction control, and performance tuning.
 
@@ -82,6 +82,7 @@ DCL statements protect and prevent the database from corruptions.
 
 | Statement | Description |
 |-----------|-------------|
+| [`ALTER DEFAULT PRIVILEGES`](commands/dcl_alter_default_privileges) | Define default privileges |
 | [`ALTER GROUP`](commands/dcl_alter_group) | Alter a group |
 | [`ALTER ROLE`](commands/dcl_alter_role) | Alter a role (user or group) |
 | [`ALTER USER`](commands/dcl_alter_user) | Alter a user |
@@ -90,9 +91,13 @@ DCL statements protect and prevent the database from corruptions.
 | [`CREATE USER`](commands/dcl_create_user) | Create a new user (role) |
 | [`DROP GROUP`](commands/dcl_drop_group) | Drop a group |
 | [`DROP ROLE`](commands/dcl_drop_role) | Drop a role (user or group) |
+| [`DROP OWNED`](commands/dcl_drop_owned) | Drop owned objects |
 | [`DROP USER`](commands/dcl_drop_user) | Drop a user |
 | [`GRANT`](commands/dcl_grant) | Grant permissions |
+| [`REASSIGN OWNED`](commands/dcl_reassign_owned) | Reassign owned objects |
 | [`REVOKE`](commands/dcl_revoke) | Revoke permissions |
+| [`SET ROLE`](commands/dcl_set_role) | Set a role |
+| [`SET SESSION AUTHORIZATION`](commands/set_session_authorization) | Set session authorization |
 
 ## Transaction control language (TCL)
 

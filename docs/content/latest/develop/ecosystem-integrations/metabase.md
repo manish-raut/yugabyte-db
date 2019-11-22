@@ -13,11 +13,11 @@ isTocNested: true
 showAsideToc: true
 ---
 
-[Metabase](https://www.metabase.com/) is an extremly easy-to-use Business Intelligence (BI) tool. It bills itself as `the easy, open source way for everyone in your company to ask questions and learn from data`. This page shows how Metabase can be setup to integrate with Yugabyte DB's PostgreSQL compatible API.
+[Metabase](https://www.metabase.com/) is an extremly easy-to-use Business Intelligence (BI) tool. It bills itself as `the easy, open source way for everyone in your company to ask questions and learn from data`. This page shows how Metabase can be setup to integrate with YugabyteDB's PostgreSQL compatible API.
 
 ## 1. Start local cluster with YSQL API enabled
 
-Follow [Quick Start](../../../quick-start/) instructions to run a local Yugabyte DB cluster. Test Yugabyte DB's PostgreSQL compatible YSQL API as [documented](../../../quick-start/test-postgresql/) so that you can confirm that you have a PostgresSQL compatible service running on `localhost:5433`. 
+Follow [Quick Start](../../../quick-start/) instructions to run a local YugabyteDB cluster. Test YugabyteDB's PostgreSQL compatible YSQL API as [documented](../../../quick-start/test-postgresql/) so that you can confirm that you have a PostgresSQL compatible service running on `localhost:5433`. 
 
 ## 2. Load data
 
@@ -45,7 +45,7 @@ $ ls data/
 orders.sql	products.sql	reviews.sql	users.sql
 ```
 
-### Connect to Yugabyte DB using ysqlsh
+### Connect to YugabyteDB using ysqlsh
 
 You can do this as shown below.
 
@@ -57,47 +57,47 @@ $ ./bin/ysqlsh
 ysqlsh (11.2)
 Type "help" for help.
 
-postgres=#
+yugabyte=#
 ```
 
 ### Create a database
 
-```sql
-postgres=> CREATE DATABASE yb_demo;
+```postgresql
+yugabyte=# CREATE DATABASE yb_demo;
 ```
 
-```sql
-postgres=> GRANT ALL ON DATABASE yb_demo to postgres;
+```postgresql
+yugabyte=# GRANT ALL ON DATABASE yb_demo to postgres;
 ```
 
-```sql
-postgres=> \c yb_demo;
+```postgresql
+yugabyte=# \c yb_demo;
 ```
 
 ### Create schema and load data
 
 First create the 4 tables necessary to store the data.
 
-```sql
-postgres=> \i 'schema.sql';
+```postgresql
+yugabyte=# \i 'schema.sql';
 ```
 
 Now load the data into the tables.
 
-```sql
-postgres=> \i 'data/products.sql'
+```postgresql
+yugabyte=# \i 'data/products.sql'
 ```
 
-```sql
-postgres=> \i 'data/users.sql'
+```postgresql
+yugabyte=# \i 'data/users.sql'
 ```
 
-```sql
-postgres=> \i 'data/orders.sql'
+```postgresql
+yugabyte=# \i 'data/orders.sql'
 ```
 
-```sql
-postgres=> \i 'data/reviews.sql'
+```postgresql
+yugabyte=# \i 'data/reviews.sql'
 ```
 
 ## 3. Download and configure Metabase

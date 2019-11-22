@@ -19,6 +19,12 @@
 
 #include "yb/common/common.pb.h"
 
+#include "yb/tserver/tserver_shared_mem.h"
+#include "yb/tserver/tserver_service.proxy.h"
+
+using namespace std::literals;
+using namespace std::placeholders;
+
 namespace yb {
 namespace pggate {
 
@@ -30,14 +36,13 @@ using client::YBSession;
 using client::YBSessionPtr;
 using client::LocalTabletFilter;
 
-// This should match XACT_SERIALIZABLE from xact.h.
-constexpr int kSerializable = 3;
-
 PgTxnManager::PgTxnManager(
     AsyncClientInitialiser* async_client_init,
-    scoped_refptr<ClockBase> clock)
+    scoped_refptr<ClockBase> clock,
+    const tserver::TServerSharedObject* tserver_shared_object)
     : async_client_init_(async_client_init),
-      clock_(std::move(clock)) {
+      clock_(std::move(clock)),
+      tserver_shared_object_(tserver_shared_object) {
 }
 
 PgTxnManager::~PgTxnManager() {
@@ -48,20 +53,29 @@ PgTxnManager::~PgTxnManager() {
   ResetTxnAndSession();
 }
 
-Status PgTxnManager::BeginTransaction(int isolation_level) {
+Status PgTxnManager::BeginTransaction() {
   VLOG(2) << "BeginTransaction: txn_in_progress_=" << txn_in_progress_;
   if (txn_in_progress_) {
     return STATUS(IllegalState, "Transaction is already in progress");
   }
   ResetTxnAndSession();
-  isolation_level_ = isolation_level;
   txn_in_progress_ = true;
   StartNewSession();
   return Status::OK();
 }
 
 Status PgTxnManager::SetIsolationLevel(int level) {
-  isolation_level_ = level;
+  isolation_level_ = static_cast<PgIsolationLevel>(level);
+  return Status::OK();
+}
+
+Status PgTxnManager::SetReadOnly(bool read_only) {
+  read_only_ = read_only;
+  return Status::OK();
+}
+
+Status PgTxnManager::SetDeferrable(bool deferrable) {
+  deferrable_ = deferrable;
   return Status::OK();
 }
 
@@ -75,28 +89,49 @@ Status PgTxnManager::BeginWriteTransactionIfNecessary(bool read_only_op) {
   VLOG(2) << "BeginWriteTransactionIfNecessary: txn_in_progress_="
           << txn_in_progress_;
 
-  auto isolation = isolation_level_ == kSerializable
+  // Using Postgres isolation_level_, read_only_, and deferrable_, determine the internal isolation
+  // level and defer effect.
+  IsolationLevel isolation = (isolation_level_ == PgIsolationLevel::SERIALIZABLE) && !read_only_
       ? IsolationLevel::SERIALIZABLE_ISOLATION : IsolationLevel::SNAPSHOT_ISOLATION;
-  // Sanity check, query layer should ensure this does not happen.
-  if (txn_ && txn_->isolation() != isolation) {
-    return STATUS(IllegalState, "Changing txn isolation level in the middle of a transaction");
-  }
-  if (read_only_op && isolation == IsolationLevel::SNAPSHOT_ISOLATION) {
-    return Status::OK();
-  }
+  bool defer = read_only_ && deferrable_;
+
   if (txn_) {
-    return Status::OK();
-  }
-  txn_ = std::make_shared<YBTransaction>(GetOrCreateTransactionManager());
-  if (session_ && isolation == IsolationLevel::SNAPSHOT_ISOLATION) {
-    txn_->InitWithReadPoint(isolation, std::move(*session_->read_point()));
+    // Sanity check: query layer should ensure that this does not happen.
+    if (txn_->isolation() != isolation) {
+      return STATUS(IllegalState, "Changing txn isolation level in the middle of a transaction");
+    }
+  } else if (read_only_op && isolation == IsolationLevel::SNAPSHOT_ISOLATION) {
+    if (defer) {
+      // This call is idempotent, meaning it has no affect after the first call.
+      session_->DeferReadPoint();
+    }
   } else {
-    RETURN_NOT_OK(txn_->Init(isolation));
+    if (tserver_shared_object_) {
+      if (!tablet_server_proxy_) {
+        LOG(INFO) << "Using TServer endpoint: " << (**tserver_shared_object_).endpoint();
+        tablet_server_proxy_ = std::make_unique<tserver::TabletServerServiceProxy>(
+          &async_client_init_->client()->proxy_cache(),
+          HostPort((**tserver_shared_object_).endpoint()));
+      }
+      tserver::TakeTransactionRequestPB req;
+      tserver::TakeTransactionResponsePB resp;
+      rpc::RpcController controller;
+      // TODO(dtxn) propagate timeout from higher level
+      controller.set_timeout(10s);
+      RETURN_NOT_OK(tablet_server_proxy_->TakeTransaction(req, &resp, &controller));
+      txn_ = YBTransaction::Take(
+          GetOrCreateTransactionManager(),
+          VERIFY_RESULT(TransactionMetadata::FromPB(resp.metadata())));
+    } else {
+      txn_ = std::make_shared<YBTransaction>(GetOrCreateTransactionManager());
+    }
+    if (isolation == IsolationLevel::SNAPSHOT_ISOLATION) {
+      txn_->InitWithReadPoint(isolation, std::move(*session_->read_point()));
+    } else {
+      RETURN_NOT_OK(txn_->Init(isolation));
+    }
+    session_->SetTransaction(txn_);
   }
-  if (!session_) {
-    StartNewSession();
-  }
-  session_->SetTransaction(txn_);
   return Status::OK();
 }
 
@@ -169,7 +204,7 @@ TransactionManager* PgTxnManager::GetOrCreateTransactionManager() {
 
 Result<client::YBSession*> PgTxnManager::GetTransactionalSession() {
   if (!txn_in_progress_) {
-    RETURN_NOT_OK(BeginTransaction(isolation_level_));
+    RETURN_NOT_OK(BeginTransaction());
   }
   return session_.get();
 }

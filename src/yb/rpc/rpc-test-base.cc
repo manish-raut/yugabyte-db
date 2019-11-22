@@ -58,10 +58,9 @@ namespace {
 constexpr size_t kQueueLength = 1000;
 
 Slice GetSidecarPointer(const RpcController& controller, int idx, int expected_size) {
-  Slice sidecar;
-  CHECK_OK(controller.GetSidecar(idx, &sidecar));
+  Slice sidecar = CHECK_RESULT(controller.GetSidecar(idx));
   CHECK_EQ(expected_size, sidecar.size());
-  return Slice(sidecar.data(), expected_size);
+  return sidecar;
 }
 
 MessengerBuilder CreateMessengerBuilder(const std::string& name,
@@ -485,6 +484,11 @@ CHECKED_STATUS RpcTestBase::StartFakeServer(Socket* listen_sock, HostPort* liste
 std::unique_ptr<Messenger> RpcTestBase::CreateMessenger(
     const string &name, const MessengerOptions& options) {
   return yb::rpc::CreateMessenger(name, metric_entity_, options);
+}
+
+AutoShutdownMessengerHolder RpcTestBase::CreateAutoShutdownMessengerHolder(
+    const string &name, const MessengerOptions& options) {
+  return rpc::CreateAutoShutdownMessengerHolder(CreateMessenger(name, options));
 }
 
 MessengerBuilder RpcTestBase::CreateMessengerBuilder(const string &name,

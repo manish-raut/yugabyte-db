@@ -21,9 +21,10 @@ export default class ListBackups extends Component {
     currentUniverse: PropTypes.object.isRequired
   }
 
-  componentWillMount() {
+  componentDidMount() {
     const { currentUniverse: { universeUUID }} = this.props;
     this.props.fetchUniverseBackups(universeUUID);
+    this.props.fetchUniverseList();
   }
 
   componentWillUnMount() {
@@ -71,7 +72,7 @@ export default class ListBackups extends Component {
             </div>
             <div className="pull-right">
               <div className="backup-action-btn-group">
-                <TableAction className="table-action" btnClass={"btn-primary"}
+                <TableAction className="table-action" btnClass={"btn-orange"}
                              actionType="create-backup" isMenuItem={false} />
                 <TableAction className="table-action" btnClass={"btn-default"}
                              actionType="restore-backup" isMenuItem={false} />
@@ -109,7 +110,7 @@ export default class ListBackups extends Component {
                               className="no-border storage-cell" >
               Storage Location
             </TableHeaderColumn>
-            <TableHeaderColumn dataField={"actions"} columnClassName={"yb-actions-cell"}
+            <TableHeaderColumn dataField={"actions"} columnClassName={"no-border yb-actions-cell"} className={"no-border yb-actions-cell"}
                                dataFormat={formatActionButtons} headerAlign='center' dataAlign='center' >
               Actions
             </TableHeaderColumn>

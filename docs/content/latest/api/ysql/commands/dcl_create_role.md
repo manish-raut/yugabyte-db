@@ -14,7 +14,7 @@ showAsideToc: true
 
 ## Synopsis
 
-`CREATE ROLE` adds a new role to a Yugabyte database cluster. A role is an entity that can own database objects and have database privileges.
+`CREATE ROLE` adds a new role to a YugabyteDB database cluster. A role is an entity that can own database objects and have database privileges.
 A role can be a user or a group, depending on how it is used. A role with atttribute `LOGIN` can be considered as a "user".
 You must have `CREATEROLE` privilege or be a database superuser to use this command.
 
@@ -74,19 +74,19 @@ Note that password is always stored encrypted in system catalogs and the optiona
 
 - Create a role that can login.
 
-```sql
+```postgresql
 yugabyte=# CREATE ROLE John LOGIN;
 ```
 
 - Create a role that can login and has a password.
 
-```sql
+```postgresql
 yugabyte=# CREATE ROLE Jane LOGIN PASSWORD 'password';
 ```
 
 - Create a role that can manage databases and roles.
 
-```sql
+```postgresql
 yugabyte=# CREATE ROLE SysAdmin CREATEDB CREATEROLE;
 ```
 

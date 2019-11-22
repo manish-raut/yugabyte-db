@@ -40,7 +40,7 @@ showAsideToc: true
 
 This tutorial assumes that you have:
 
-- installed Yugabyte DB and created a universe with YSQL enabled. If not, please follow these steps in the [Quick Start guide](../../../../quick-start/explore-ysql/).
+- installed YugabyteDB and created a universe with YSQL enabled. If not, please follow these steps in the [Quick Start guide](../../../../quick-start/explore-ysql/).
 
 ## Clone the orm-examples repo
 
@@ -127,22 +127,11 @@ $ ./bin/ysqlsh
 ysqlsh (11.2)
 Type "help" for help.
 
-postgres=#
+yugabyte=#
 ```
 
-```sql
-postgres=> SELECT count(*) FROM users;
-```
-
-```
- count 
--------
-     2
-(1 row)
-```
-
-```sql
-postgres=> SELECT count(*) FROM products;
+```postgresql
+yugabyte=# SELECT count(*) FROM users;
 ```
 
 ```
@@ -152,8 +141,19 @@ postgres=> SELECT count(*) FROM products;
 (1 row)
 ```
 
-```sql
-postgres=> SELECT count(*) FROM orders;
+```postgresql
+yugabyte=# SELECT count(*) FROM products;
+```
+
+```
+ count 
+-------
+     2
+(1 row)
+```
+
+```postgresql
+yugabyte=# SELECT count(*) FROM orders;
 ```
 
 ```

@@ -48,6 +48,8 @@
 #include "yb/client/table_handle.h"
 #include "yb/client/yb_op.h"
 
+#include "yb/common/ql_value.h"
+
 #include "yb/gutil/gscoped_ptr.h"
 #include "yb/gutil/stl_util.h"
 #include "yb/gutil/strings/join.h"
@@ -143,7 +145,8 @@ class AlterTableTest : public YBMiniClusterTestBase<MiniCluster>,
         .default_admin_operation_timeout(MonoDelta::FromSeconds(60))
         .Build());
 
-    CHECK_OK(client_->CreateNamespaceIfNotExists(kTableName.namespace_name()));
+    CHECK_OK(client_->CreateNamespaceIfNotExists(kTableName.namespace_name(),
+                                                 kTableName.namespace_type()));
 
     // Add a table, make sure it reports itself.
     gscoped_ptr<YBTableCreator> table_creator(client_->NewTableCreator());
@@ -244,7 +247,8 @@ class AlterTableTest : public YBMiniClusterTestBase<MiniCluster>,
   void ScannerThread();
 
   Status CreateTable(const YBTableName& table_name) {
-    RETURN_NOT_OK(client_->CreateNamespaceIfNotExists(table_name.namespace_name()));
+    RETURN_NOT_OK(client_->CreateNamespaceIfNotExists(table_name.namespace_name(),
+                                                      table_name.namespace_type()));
 
     gscoped_ptr<YBTableCreator> table_creator(client_->NewTableCreator());
     return table_creator->table_name(table_name)
@@ -278,7 +282,7 @@ class ReplicatedAlterTableTest : public AlterTableTest {
   virtual int num_replicas() const override { return 3; }
 };
 
-const YBTableName AlterTableTest::kTableName("my_keyspace", "fake-table");
+const YBTableName AlterTableTest::kTableName(YQL_DATABASE_CQL, "my_keyspace", "fake-table");
 
 // Simple test to verify that the "alter table" command sent and executed
 // on the TS handling the tablet of the altered table.
@@ -580,7 +584,7 @@ TEST_F(AlterTableTest, TestLogSchemaReplay) {
 // over column ids after a table rename.
 TEST_F(AlterTableTest, TestRenameTableAndAdd) {
   gscoped_ptr<YBTableAlterer> table_alterer(client_->NewTableAlterer(kTableName));
-  YBTableName new_name(kTableName.namespace_name(), "someothername");
+  YBTableName new_name(kTableName.namespace_type(), kTableName.namespace_name(), "someothername");
   ASSERT_OK(table_alterer->RenameTo(new_name)
             ->Alter());
 
@@ -839,7 +843,7 @@ TEST_F(AlterTableTest, TestAlterUnderWriteLoad) {
 }
 
 TEST_F(AlterTableTest, TestInsertAfterAlterTable) {
-  YBTableName kSplitTableName("my_keyspace", "split-table");
+  YBTableName kSplitTableName(YQL_DATABASE_CQL, "my_keyspace", "split-table");
 
   // Create a new table with 10 tablets.
   //
@@ -873,7 +877,7 @@ TEST_F(AlterTableTest, TestInsertAfterAlterTable) {
 // seen in an earlier implementation of "alter table" where these could
 // conflict with each other.
 TEST_F(AlterTableTest, TestMultipleAlters) {
-  YBTableName kSplitTableName("my_keyspace", "split-table");
+  YBTableName kSplitTableName(YQL_DATABASE_CQL, "my_keyspace", "split-table");
   const size_t kNumNewCols = 10;
 
   // Create a new table with 10 tablets.

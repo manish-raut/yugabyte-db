@@ -22,6 +22,7 @@
 
 #include "yb/common/pgsql_error.h"
 #include "yb/common/transaction.h"
+#include "yb/common/transaction_error.h"
 #include "yb/common/wire_protocol.h"
 
 #include "yb/gutil/strings/substitute.h"
@@ -214,11 +215,17 @@ void AsyncRpc::Failed(const Status& status) {
         resp->set_status(status.IsTryAgain() ? PgsqlResponsePB::PGSQL_STATUS_RESTART_REQUIRED_ERROR
                                              : PgsqlResponsePB::PGSQL_STATUS_RUNTIME_ERROR);
         resp->set_error_message(error_message);
-        const uint8_t* pgerr = status.ErrorData(PgsqlErrorTag::kCategory);
-        if (pgerr != nullptr) {
-          resp->set_pg_error_code(static_cast<uint32_t>(PgsqlErrorTag::Decode(pgerr)));
+        const uint8_t* pg_err_ptr = status.ErrorData(PgsqlErrorTag::kCategory);
+        if (pg_err_ptr != nullptr) {
+          resp->set_pg_error_code(static_cast<uint32_t>(PgsqlErrorTag::Decode(pg_err_ptr)));
         } else {
           resp->set_pg_error_code(static_cast<uint32_t>(YBPgErrorCode::YB_PG_INTERNAL_ERROR));
+        }
+        const uint8_t* txn_err_ptr = status.ErrorData(TransactionErrorTag::kCategory);
+        if (txn_err_ptr != nullptr) {
+          resp->set_txn_error_code(static_cast<uint16_t>(TransactionErrorTag::Decode(txn_err_ptr)));
+        } else {
+          resp->set_txn_error_code(static_cast<uint16_t>(TransactionErrorCode::kNone));
         }
         break;
       }
@@ -235,22 +242,20 @@ bool AsyncRpc::IsLocalCall() const {
 
 namespace {
 
-void SetTransactionMetadata(const TransactionMetadata& metadata, bool may_have_metadata,
-                            tserver::WriteRequestPB* req) {
+void SetTransactionMetadata(const TransactionMetadata& metadata, tserver::WriteRequestPB* req) {
   auto& write_batch = *req->mutable_write_batch();
   metadata.ToPB(write_batch.mutable_transaction());
-  write_batch.set_may_have_metadata(may_have_metadata);
+  write_batch.set_deprecated_may_have_metadata(true);
 }
 
-void SetTransactionMetadata(const TransactionMetadata& metadata, bool may_have_metadata,
-                            tserver::ReadRequestPB* req) {
+void SetTransactionMetadata(const TransactionMetadata& metadata, tserver::ReadRequestPB* req) {
   metadata.ToPB(req->mutable_transaction());
-  req->set_may_have_metadata(may_have_metadata);
+  req->set_deprecated_may_have_metadata(true);
 }
 
 } // namespace
 
-void AsyncRpc::SendRpcToTserver() {
+void AsyncRpc::SendRpcToTserver(int attempt_num) {
   MonoTime end_time = MonoTime::Now();
   if (async_rpc_metrics_) {
     async_rpc_metrics_->time_to_send->Increment(end_time.GetDeltaSince(start_).ToMicroseconds());
@@ -281,13 +286,12 @@ AsyncRpcBase<Req, Resp>::AsyncRpcBase(AsyncRpcData* data, YBConsistencyLevel con
   }
   auto& transaction_metadata = batcher_->transaction_metadata();
   if (!transaction_metadata.transaction_id.is_nil()) {
-    SetTransactionMetadata(transaction_metadata, batcher_->may_have_metadata(), &req_);
+    SetTransactionMetadata(transaction_metadata, &req_);
     bool serializable = transaction_metadata.isolation == IsolationLevel::SERIALIZABLE_ISOLATION;
     LOG_IF(DFATAL, has_read_time && serializable)
         << "Read time should NOT be specified for serializable isolation: "
         << read_point->GetReadTime().ToString();
   }
-  req_.set_memory_limit_score(data->memory_limit_score);
 }
 
 template <class Req, class Resp>
@@ -310,14 +314,14 @@ bool AsyncRpcBase<Req, Resp>::CommonResponseCheck(const Status& status) {
       read_point->RestartRequired(req_.tablet_id(), restart_read_time);
     }
     Failed(STATUS(TryAgain, Format("Restart read required at: $0", restart_read_time), Slice(),
-                  PgsqlError(YBPgErrorCode::YB_PG_T_R_SERIALIZATION_FAILURE)));
+                  TransactionError(TransactionErrorCode::kReadRestartRequired)));
     return false;
   }
   return true;
 }
 
 template <class Req, class Resp>
-void AsyncRpcBase<Req, Resp>::SendRpcToTserver() {
+void AsyncRpcBase<Req, Resp>::SendRpcToTserver(int attempt_num) {
   if (!tablet_invoker_.current_ts().HasCapability(CAPABILITY_PickReadTimeAtTabletServer)) {
     ConsistentReadPoint* read_point = batcher_->read_point();
     if (read_point && !read_point->GetReadTime()) {
@@ -331,44 +335,16 @@ void AsyncRpcBase<Req, Resp>::SendRpcToTserver() {
     }
   }
 
-  AsyncRpc::SendRpcToTserver();
+  req_.set_rejection_score(batcher_->RejectionScore(attempt_num));
+  AsyncRpc::SendRpcToTserver(attempt_num);
 }
 
 WriteRpc::WriteRpc(AsyncRpcData* data)
     : AsyncRpcBase(data, YBConsistencyLevel::STRONG) {
   TRACE_TO(trace_, "WriteRpc initiated to $0", data->tablet->tablet_id());
-#ifndef NDEBUG
-  const Schema& schema = GetSchema(table()->schema());
-#endif
-
   // Add the rows
   int ctr = 0;
   for (auto& op : ops_) {
-#ifndef NDEBUG
-    const Partition& partition = op->tablet->partition();
-    const PartitionSchema& partition_schema = table()->partition_schema();
-
-    bool partition_contains_row = false;
-    std::string partition_key;
-    switch (op->yb_op->type()) {
-      case YBOperation::QL_READ: FALLTHROUGH_INTENDED;
-      case YBOperation::QL_WRITE: FALLTHROUGH_INTENDED;
-      case YBOperation::PGSQL_READ: FALLTHROUGH_INTENDED;
-      case YBOperation::PGSQL_WRITE: FALLTHROUGH_INTENDED;
-      case YBOperation::REDIS_READ: FALLTHROUGH_INTENDED;
-      case YBOperation::REDIS_WRITE: {
-        CHECK_OK(op->yb_op->GetPartitionKey(&partition_key));
-        partition_contains_row = partition.ContainsKey(partition_key);
-        break;
-      }
-    }
-
-    CHECK(partition_contains_row)
-        << "Row " << op->yb_op->ToString()
-        << " not in partition " << partition_schema.PartitionDebugString(partition, schema)
-        << " partition_key: '" << Slice(partition_key).ToDebugHexString() << "'";
-
-#endif
     // Move write request PB into tserver write request PB for performance.
     // Will restore in ProcessResponseFromTserver.
     switch (op->yb_op->type()) {
@@ -453,13 +429,6 @@ void WriteRpc::CallRemoteMethod() {
   TRACE_TO(trace, "RpcDispatched Asynchronously");
 }
 
-void WriteRpc::Finished(const Status& status) {
-  // It is possible that call succeeded, but failed to send response.
-  // So in case of retry to should tell server that it could have metadata.
-  req_.mutable_write_batch()->set_may_have_metadata(true);
-  AsyncRpc::Finished(status);
-}
-
 void WriteRpc::SwapRequestsAndResponses(bool skip_responses = false) {
   size_t redis_idx = 0;
   size_t ql_idx = 0;
@@ -527,10 +496,9 @@ void WriteRpc::SwapRequestsAndResponses(bool skip_responses = false) {
         ql_op->mutable_response()->Swap(resp_.mutable_ql_response_batch(ql_idx));
         const auto& ql_response = ql_op->response();
         if (ql_response.has_rows_data_sidecar()) {
-          Slice rows_data;
-          CHECK_OK(retrier().controller().GetSidecar(
-              ql_response.rows_data_sidecar(), &rows_data));
-          ql_op->mutable_rows_data()->assign(util::to_char_ptr(rows_data.data()), rows_data.size());
+          Slice rows_data = CHECK_RESULT(
+              retrier().controller().GetSidecar(ql_response.rows_data_sidecar()));
+          ql_op->mutable_rows_data()->assign(rows_data.cdata(), rows_data.size());
         }
         ql_idx++;
         break;
@@ -545,9 +513,8 @@ void WriteRpc::SwapRequestsAndResponses(bool skip_responses = false) {
         pgsql_op->mutable_response()->Swap(resp_.mutable_pgsql_response_batch(pgsql_idx));
         const auto& pgsql_response = pgsql_op->response();
         if (pgsql_response.has_rows_data_sidecar()) {
-          Slice rows_data;
-          CHECK_OK(retrier().controller().GetSidecar(
-              pgsql_response.rows_data_sidecar(), &rows_data));
+          Slice rows_data = CHECK_RESULT(retrier().controller().GetSidecar(
+              pgsql_response.rows_data_sidecar()));
           down_cast<YBPgsqlWriteOp*>(yb_op)->mutable_rows_data()->assign(
               util::to_char_ptr(rows_data.data()), rows_data.size());
         }
@@ -668,20 +635,11 @@ void ReadRpc::CallRemoteMethod() {
                        // Detailed explanation in WriteRpc::SendRpcToTserver.
   TRACE_TO(trace, "SendRpcToTserver");
   ADOPT_TRACE(trace.get());
+
   tablet_invoker_.proxy()->ReadAsync(
       req_, &resp_, PrepareController(),
       std::bind(&ReadRpc::Finished, this, Status::OK()));
   TRACE_TO(trace, "RpcDispatched Asynchronously");
-}
-
-void ReadRpc::Finished(const Status& status) {
-  // It is possible that call succeeded, but failed to send response.
-  // So in case of retry to should tell server that it could have metadata.
-  if (req_.has_transaction() &&
-      req_.transaction().isolation() == IsolationLevel::SERIALIZABLE_ISOLATION) {
-    req_.set_may_have_metadata(true);
-  }
-  AsyncRpc::Finished(status);
 }
 
 void ReadRpc::SwapRequestsAndResponses(bool skip_responses) {
@@ -749,9 +707,8 @@ void ReadRpc::SwapRequestsAndResponses(bool skip_responses) {
         ql_op->mutable_response()->Swap(resp_.mutable_ql_batch(ql_idx));
         const auto& ql_response = ql_op->response();
         if (ql_response.has_rows_data_sidecar()) {
-          Slice rows_data;
-          CHECK_OK(retrier().controller().GetSidecar(
-              ql_response.rows_data_sidecar(), &rows_data));
+          Slice rows_data = CHECK_RESULT(retrier().controller().GetSidecar(
+              ql_response.rows_data_sidecar()));
           ql_op->mutable_rows_data()->assign(util::to_char_ptr(rows_data.data()), rows_data.size());
         }
         ql_idx++;
@@ -767,9 +724,8 @@ void ReadRpc::SwapRequestsAndResponses(bool skip_responses) {
         pgsql_op->mutable_response()->Swap(resp_.mutable_pgsql_batch(pgsql_idx));
         const auto& pgsql_response = pgsql_op->response();
         if (pgsql_response.has_rows_data_sidecar()) {
-          Slice rows_data;
-          CHECK_OK(retrier().controller().GetSidecar(
-              pgsql_response.rows_data_sidecar(), &rows_data));
+          Slice rows_data = CHECK_RESULT(retrier().controller().GetSidecar(
+              pgsql_response.rows_data_sidecar()));
           down_cast<YBPgsqlReadOp*>(yb_op)->mutable_rows_data()->assign(
               util::to_char_ptr(rows_data.data()), rows_data.size());
         }

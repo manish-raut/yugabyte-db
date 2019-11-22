@@ -20,6 +20,7 @@
 
 #include <glog/logging.h>
 
+#include "yb/common/common_fwd.h"
 #include "yb/common/key_encoder.h"
 #include "yb/common/common.pb.h"
 #include "yb/util/result.h"
@@ -264,6 +265,7 @@ class QLType {
     return -1;
   }
 
+  // Get the type ids of all UDTs (transitively) referenced by this UDT.
   std::vector<std::string> GetUserDefinedTypeIds() const {
     std::vector<std::string> udt_ids;
     GetUserDefinedTypeIds(&udt_ids);
@@ -279,8 +281,24 @@ class QLType {
     }
   }
 
+  // Get the type ids of all UDTs referenced by this UDT.
+  static void GetUserDefinedTypeIds(const QLTypePB& type_pb,
+                                    const bool transitive,
+                                    std::vector<std::string>* udt_ids) {
+    if (type_pb.main() == USER_DEFINED_TYPE) {
+      udt_ids->push_back(type_pb.udtype_info().id());
+      if (!transitive) {
+        return; // Do not check params of the UDT if only looking for direct dependencies.
+      }
+    }
+
+    for (const auto& param : type_pb.params()) {
+      GetUserDefinedTypeIds(param, transitive, udt_ids);
+    }
+  }
+
   // Returns the type of given field, or nullptr if that field is not found in this UDT.R
-  const Result<QLType::SharedPtr> GetUDTFieldTypeByName(const std::string& field_name) const {
+  Result<QLType::SharedPtr> GetUDTFieldTypeByName(const std::string& field_name) const {
     SCHECK(IsUserDefined(), InternalError, "Can only be called on UDT");
     const int idx = GetUDTypeFieldIdxByName(field_name);
     if (idx == -1) {
@@ -384,6 +402,10 @@ class QLType {
     }
 
     return false;
+  }
+
+  bool operator !=(const QLType& other) const {
+    return !(*this == other);
   }
 
   //------------------------------------------------------------------------------------------------
@@ -544,7 +566,7 @@ class QLType {
     static const bool kNO = false;
     static const bool kCompareMode[kMaxTypeIndex][kMaxTypeIndex] = {
         // LHS ==  RHS (source)
-        //         nul | i8  | i16 | i32 | i64 | str | bln | flt | dbl | bin | tst | dec | vit | ine | lst | map | set | uid | tui | tup | arg | udt | frz | dat | tim | jso 
+        //         nul | i8  | i16 | i32 | i64 | str | bln | flt | dbl | bin | tst | dec | vit | ine | lst | map | set | uid | tui | tup | arg | udt | frz | dat | tim | jso
         /* nul */{ kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO },
         /* i8  */{ kNO,  kYS,  kYS,  kYS,  kYS,  kNO,  kNO,  kYS,  kYS,  kNO,  kNO,  kNO,  kYS,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO },
         /* i16 */{ kNO,  kYS,  kYS,  kYS,  kYS,  kNO,  kNO,  kYS,  kYS,  kNO,  kNO,  kNO,  kYS,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO,  kNO },

@@ -57,6 +57,7 @@ class YBTableTestBase : public YBTest {
   YBTableTestBase();
   virtual void SetUp() override;
   virtual void TearDown() override;
+  virtual void BeforeCreateTable();
 
   virtual bool use_external_mini_cluster();
   virtual int session_timeout_ms();
@@ -67,7 +68,7 @@ class YBTableTestBase : public YBTest {
   virtual client::YBTableName table_name();
   virtual bool need_redis_table();
 
-  void CreateRedisTable(client::YBTableName table_name);
+  void CreateRedisTable(const client::YBTableName& table_name);
   virtual void CreateTable();
   void OpenTable();
   void DeleteTable();

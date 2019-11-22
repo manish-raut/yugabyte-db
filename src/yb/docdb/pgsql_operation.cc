@@ -17,6 +17,7 @@
 
 #include "yb/common/partition.h"
 #include "yb/common/ql_storage_interface.h"
+#include "yb/common/ql_value.h"
 
 #include "yb/docdb/doc_pgsql_scanspec.h"
 #include "yb/docdb/doc_rowwise_iterator.h"
@@ -25,6 +26,10 @@
 #include "yb/util/trace.h"
 
 DECLARE_bool(trace_docdb_calls);
+DECLARE_int64(retryable_rpc_single_call_timeout_ms);
+
+DEFINE_double(ysql_scan_timeout_multiplier, 0.5,
+              "YSQL read scan timeout multipler of retryable_rpc_single_call_timeout_ms.");
 
 namespace yb {
 namespace docdb {
@@ -89,26 +94,31 @@ Status PgsqlWriteOperation::Apply(const DocOperationApplyData& data) {
 
   switch (request_.stmt_type()) {
     case PgsqlWriteRequestPB::PGSQL_INSERT:
-      return ApplyInsert(data);
+      return ApplyInsert(data, IsUpsert::kFalse);
 
     case PgsqlWriteRequestPB::PGSQL_UPDATE:
       return ApplyUpdate(data);
 
     case PgsqlWriteRequestPB::PGSQL_DELETE:
       return ApplyDelete(data);
+
+    case PgsqlWriteRequestPB::PGSQL_UPSERT:
+      return ApplyInsert(data, IsUpsert::kTrue);
   }
   return Status::OK();
 }
 
-Status PgsqlWriteOperation::ApplyInsert(const DocOperationApplyData& data) {
+Status PgsqlWriteOperation::ApplyInsert(const DocOperationApplyData& data, IsUpsert is_upsert) {
   QLTableRow::SharedPtr table_row = std::make_shared<QLTableRow>();
-  RETURN_NOT_OK(ReadColumns(data, table_row));
-  if (!table_row->IsEmpty()) {
-    VLOG(4) << "Duplicate row: " << table_row->ToString();
-    // Primary key or unique index value found.
-    response_->set_status(PgsqlResponsePB::PGSQL_STATUS_DUPLICATE_KEY_ERROR);
-    response_->set_error_message("Duplicate key found in primary key or unique index");
-    return Status::OK();
+  if (!is_upsert) {
+    RETURN_NOT_OK(ReadColumns(data, table_row));
+    if (!table_row->IsEmpty()) {
+      VLOG(4) << "Duplicate row: " << table_row->ToString();
+      // Primary key or unique index value found.
+      response_->set_status(PgsqlResponsePB::PGSQL_STATUS_DUPLICATE_KEY_ERROR);
+      response_->set_error_message("Duplicate key found in primary key or unique index");
+      return Status::OK();
+    }
   }
 
   const MonoDelta ttl = Value::kMaxTtl;
@@ -337,7 +347,8 @@ Status PgsqlWriteOperation::GetDocPaths(
 
   if (mode == GetDocPathsMode::kIntents) {
     const google::protobuf::RepeatedPtrField<PgsqlColumnValuePB>* column_values = nullptr;
-    if (request_.stmt_type() == PgsqlWriteRequestPB::PGSQL_INSERT) {
+    if (request_.stmt_type() == PgsqlWriteRequestPB::PGSQL_INSERT ||
+        request_.stmt_type() == PgsqlWriteRequestPB::PGSQL_UPSERT) {
       column_values = &request_.column_values();
     } else if (request_.stmt_type() == PgsqlWriteRequestPB::PGSQL_UPDATE) {
       column_values = &request_.column_new_values();
@@ -414,10 +425,17 @@ Status PgsqlReadOperation::Execute(const common::YQLStorageIf& ql_storage,
     TRACE("Initialized iterator");
   }
 
+  // Set scan start time.
+  bool scan_time_exceeded = false;
+  const int64 scan_time_limit =
+    FLAGS_retryable_rpc_single_call_timeout_ms * FLAGS_ysql_scan_timeout_multiplier;
+  const MonoTime start_time = MonoTime::Now();
+
   // Fetching data.
   int match_count = 0;
   QLTableRow::SharedPtr row = std::make_shared<QLTableRow>();
-  while (resultset->rsrow_count() < row_count_limit && VERIFY_RESULT(iter->HasNext())) {
+  while (resultset->rsrow_count() < row_count_limit && VERIFY_RESULT(iter->HasNext()) &&
+         !scan_time_exceeded) {
 
     row->Clear();
 
@@ -453,6 +471,12 @@ Status PgsqlReadOperation::Execute(const common::YQLStorageIf& ql_storage,
         RETURN_NOT_OK(PopulateResultSet(row, resultset));
       }
     }
+
+    // Check every row_count_limit matches whether we've exceeded our scan time.
+    if (match_count % row_count_limit == 0) {
+      const MonoDelta elapsed_time = MonoTime::Now().GetDeltaSince(start_time);
+      scan_time_exceeded = elapsed_time.ToMilliseconds() > scan_time_limit;
+    }
   }
 
   if (request_.is_aggregate() && match_count > 0) {
@@ -464,13 +488,14 @@ Status PgsqlReadOperation::Execute(const common::YQLStorageIf& ql_storage,
   }
   *restart_read_ht = iter->RestartReadHt();
 
-  return SetPagingStateIfNecessary(iter, resultset, row_count_limit);
+  return SetPagingStateIfNecessary(iter, resultset, row_count_limit, scan_time_exceeded);
 }
 
 Status PgsqlReadOperation::SetPagingStateIfNecessary(const common::YQLRowwiseIteratorIf* iter,
                                                      const PgsqlResultSet* resultset,
-                                                     const size_t row_count_limit) {
-  if (resultset->rsrow_count() >= row_count_limit && !request_.is_aggregate()) {
+                                                     const size_t row_count_limit,
+                                                     const bool scan_time_exceeded) {
+  if (resultset->rsrow_count() >= row_count_limit || scan_time_exceeded) {
     SubDocKey next_row_key;
     RETURN_NOT_OK(iter->GetNextReadSubDocKey(&next_row_key));
     // When the "limit" number of rows are returned and we are asked to return the paging state,

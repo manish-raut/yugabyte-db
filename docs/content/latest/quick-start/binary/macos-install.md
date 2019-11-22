@@ -1,82 +1,96 @@
 ## Prerequisites
 
-a) <i class="fab fa-apple" aria-hidden="true"></i> macOS 10.12 (Sierra) or higher
+1. <i class="fab fa-apple" aria-hidden="true"></i> macOS 10.12 or later.
 
-b) Verify that you have python2 installed. Support for python3 is in the works.
+2. Verify that you have Python 2 installed. Support for Python 3 is in the works.
 
-```sh
-$ python --version
-```
+    ```sh
+    $ python --version
+    ```
 
-```
-Python 2.7.10
-```
+    ```
+    Python 2.7.10
+    ```
 
-c) Each tablet maps to its own file, so if you experiment with a few hundred tables and a few tablets per table, you can soon end up creating a large number of files in the current shell. Make sure that this command shows a big enough value.
+3. `wget` or `curl` is available.
 
-```sh
-$ launchctl limit maxfiles
-```
+    The instructions use the `wget` command to download files. If you prefer to use `curl` (included in macOS), you can replace `wget` with `curl -O`.
 
-We recommend simply setting the soft and hard limits to 1048576.
+    To install `wget` on your Mac, you can run the following command if you use Homebrew:
 
-- Edit `/etc/sysctl.conf` with the following contents.
+    ```sh
+    $ brew install wget
+    ```     
 
-```sh
-kern.maxfiles=1048576
-kern.maxproc=2500
-kern.maxprocperuid=2500
-kern.maxfilesperproc=1048576
-```
+4. Each tablet maps to its own file, so if you experiment with a few hundred tables and a few tablets per table, you can soon end up creating a large number of files in the current shell. Make sure that this command shows a big enough value.
 
-- If your macOS version does not have the `/etc/sysctl.conf` file, then ensure that the file `/Library/LaunchDaemons/limit.maxfiles.plist` has the following content.
+    ```sh
+    $ launchctl limit maxfiles
+    ```
 
-```sh
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-  <plist version="1.0">
-    <dict>
-      <key>Label</key>
-        <string>limit.maxfiles</string>
-      <key>ProgramArguments</key>
-        <array>
-          <string>launchctl</string>
-          <string>limit</string>
-          <string>maxfiles</string>
-          <string>1048576</string>
-          <string>1048576</string>
-        </array>
-      <key>RunAtLoad</key>
-        <true/>
-      <key>ServiceIPC</key>
-        <false/>
-    </dict>
-  </plist>
-```
+    We recommend setting the soft and hard limits to 1048576.
 
-Enure that the plist file is owned by `root:wheel` and has permissions `-rw-r--r--`. Reboot your computer for this to take effect. Or, to avoid this effort, enter this command:
+    Edit `/etc/sysctl.conf`, if it exists, to include the following:
 
-```sh
-$ sudo launchctl load -w /Library/LaunchDaemons/limit.maxfiles.plist
-```
+    ```sh
+    kern.maxfiles=1048576
+    kern.maxproc=2500
+    kern.maxprocperuid=2500
+    kern.maxfilesperproc=1048576
+    ```
 
-You might have to `unload` the service before loading it.
+    If this file does not exist, then create the file `/Library/LaunchDaemons/limit.maxfiles.plist` and insert the following:
+
+    ```xml
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+      <plist version="1.0">
+        <dict>
+          <key>Label</key>
+            <string>limit.maxfiles</string>
+          <key>ProgramArguments</key>
+            <array>
+              <string>launchctl</string>
+              <string>limit</string>
+              <string>maxfiles</string>
+              <string>1048576</string>
+              <string>1048576</string>
+            </array>
+          <key>RunAtLoad</key>
+            <true/>
+          <key>ServiceIPC</key>
+            <false/>
+        </dict>
+      </plist>
+    ```
+
+    Enure that the `plist` file is owned by `root:wheel` and has permissions `-rw-r--r--`. To take effect, you need to reboot your computer or run this command:
+
+    ```sh
+    $ sudo launchctl load -w /Library/LaunchDaemons/limit.maxfiles.plist
+    ```
+
+    You might have to `unload` the service before loading it.
 
 ## Download
 
-Download the Yugabyte DB tar.gz as shown below.
+Download the YugabyteDB `tar.gz` file using the following `wget` command.
 
 ```sh
-$ wget https://downloads.yugabyte.com/yugabyte-2.0.0.0-darwin.tar.gz
+$ wget https://downloads.yugabyte.com/yugabyte-2.0.5.2-darwin.tar.gz
 ```
 
+To unpack the archive file and change to the YugabyteDB home directory, run the following command.
+
 ```sh
-$ tar xvfz yugabyte-2.0.0.0-darwin.tar.gz && cd yugabyte-2.0.0.0/
+$ tar xvfz yugabyte-2.0.5.2-darwin.tar.gz && cd yugabyte-2.0.5.2/
 ```
 
 ## Configure
 
-Add a few loopback IP addresses to cover the add node scenarios of the [Explore Core Features](../../explore/) section.
+Some of the examples in the [Explore core features](../../explore/) section require extra loopback addresses that allow you to simulate the use of multiple hosts or nodes.
+
+To add six loopback addresses, run the following commands, which require `sudo` access.
 
 ```sh
 sudo ifconfig lo0 alias 127.0.0.2
@@ -85,4 +99,29 @@ sudo ifconfig lo0 alias 127.0.0.4
 sudo ifconfig lo0 alias 127.0.0.5
 sudo ifconfig lo0 alias 127.0.0.6
 sudo ifconfig lo0 alias 127.0.0.7
+```
+
+**Note**: The loopback addresses do not persist upon rebooting of your Mac.
+
+To verify that the extra loopback addresses exist, run the following command.
+
+```sh
+$ifconfig lo0
+```
+
+You should see some output like the following:
+
+```
+lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384
+	options=1203<RXCSUM,TXCSUM,TXSTATUS,SW_TIMESTAMP>
+	inet 127.0.0.1 netmask 0xff000000
+	inet6 ::1 prefixlen 128
+	inet6 fe80::1%lo0 prefixlen 64 scopeid 0x1
+	inet 127.0.0.2 netmask 0xff000000
+	inet 127.0.0.3 netmask 0xff000000
+	inet 127.0.0.4 netmask 0xff000000
+	inet 127.0.0.5 netmask 0xff000000
+	inet 127.0.0.6 netmask 0xff000000
+	inet 127.0.0.7 netmask 0xff000000
+	nd6 options=201<PERFORMNUD,DAD>
 ```

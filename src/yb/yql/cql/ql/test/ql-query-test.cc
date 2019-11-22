@@ -18,6 +18,7 @@
 
 #include "yb/client/table.h"
 #include "yb/common/jsonb.h"
+#include "yb/common/ql_value.h"
 #include "yb/gutil/strings/substitute.h"
 #include "yb/master/master.h"
 #include "yb/master/ts_manager.h"
@@ -144,7 +145,7 @@ class TestQLQuery : public QLTestBase {
     CHECK_OK(processor->Run("CREATE TABLE scan_bounds_test (h1 int, h2 text, r1 int, v1 int,"
                                 " PRIMARY KEY((h1, h2), r1));"));
 
-    client::YBTableName name(kDefaultKeyspaceName, "scan_bounds_test");
+    client::YBTableName name(YQL_DATABASE_CQL, kDefaultKeyspaceName, "scan_bounds_test");
     shared_ptr<client::YBTable> table;
 
     ASSERT_OK(client_->OpenTable(name, &table));
@@ -1416,7 +1417,7 @@ TEST_F(TestQLQuery, TestCollectionTypes) {
   EXPECT_EQ(3, map_row.column(1).int32_value());
   EXPECT_EQ("x", map_row.column(3).string_value());
   // check map
-  EXPECT_EQ(QLValue::InternalType::kMapValue, map_row.column(2).type());
+  EXPECT_EQ(InternalType::kMapValue, map_row.column(2).type());
   QLMapValuePB map_value = map_row.column(2).map_value();
   // check keys
   EXPECT_EQ(3, map_value.keys_size());
@@ -1458,7 +1459,7 @@ TEST_F(TestQLQuery, TestCollectionTypes) {
   EXPECT_EQ(3, set_row.column(1).int32_value());
   EXPECT_EQ("x", set_row.column(3).string_value());
   // check set
-  EXPECT_EQ(QLValue::InternalType::kSetValue, set_row.column(2).type());
+  EXPECT_EQ(InternalType::kSetValue, set_row.column(2).type());
   QLSeqValuePB set_value = set_row.column(2).set_value();
   // check elems
   // returned set should have no duplicates
@@ -1498,7 +1499,7 @@ TEST_F(TestQLQuery, TestCollectionTypes) {
   EXPECT_EQ(3, list_row.column(1).int32_value());
   EXPECT_EQ("x", list_row.column(3).string_value());
   // check set
-  EXPECT_EQ(QLValue::InternalType::kListValue, list_row.column(2).type());
+  EXPECT_EQ(InternalType::kListValue, list_row.column(2).type());
   QLSeqValuePB list_value = list_row.column(2).list_value();
   // check elems
   // lists should preserve input length (keep duplicates if any)
@@ -1677,7 +1678,7 @@ TEST_F(TestQLQuery, TestDeleteColumn) {
   CHECK_OK(processor->Run("CREATE TABLE delete_column (h int, v1 int, v2 int,"
                             " PRIMARY KEY(h));"));
 
-  client::YBTableName name(kDefaultKeyspaceName, "delete_column");
+  client::YBTableName name(YQL_DATABASE_CQL, kDefaultKeyspaceName, "delete_column");
 
   for (int i = 0; i < 2; i++) {
     string stmt = Substitute("INSERT INTO delete_column (h, v1, v2) VALUES "
@@ -1718,7 +1719,7 @@ TEST_F(TestQLQuery, TestTtlWritetimeInWhereClauseOfSelectStatements) {
   CHECK_OK(
       processor->Run("CREATE TABLE ttl_writetime_test (h int, v1 int, v2 int, PRIMARY KEY(h))"));
 
-  client::YBTableName name(kDefaultKeyspaceName, "ttl_writetime_test");
+  client::YBTableName name(YQL_DATABASE_CQL, kDefaultKeyspaceName, "ttl_writetime_test");
 
   shared_ptr<client::YBTable> table;
 

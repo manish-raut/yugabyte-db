@@ -138,7 +138,7 @@ void MvccManager::AddPending(HybridTime* ht) {
           last_replicated_,
           last_ht_in_queue});
 
-  if (!queue_.empty() && *ht <= sanity_check_lower_bound) {
+  if (*ht <= sanity_check_lower_bound) {
     auto get_details_msg = [&](bool drain_aborted) {
       std::ostringstream ss;
 #define LOG_INFO_FOR_HT_LOWER_BOUND(t) \
@@ -149,7 +149,7 @@ void MvccManager::AddPending(HybridTime* ht) {
           << "\n  " << EXPR_VALUE_FOR_LOG(ht->PhysicalDiff(t.safe_time)) \
           << "\n  "
 
-      ss << LogPrefix() << ": new operation's hybrid time too low: " << *ht
+      ss << "New operation's hybrid time too low: " << *ht
          << LOG_INFO_FOR_HT_LOWER_BOUND(max_safe_time_returned_with_lease_)
          << LOG_INFO_FOR_HT_LOWER_BOUND(max_safe_time_returned_without_lease_)
          << LOG_INFO_FOR_HT_LOWER_BOUND(max_safe_time_returned_for_follower_)
@@ -179,7 +179,7 @@ void MvccManager::AddPending(HybridTime* ht) {
         sanity_check_lower_bound &&
         sanity_check_lower_bound != HybridTime::kMax) {
       HybridTime incremented_hybrid_time = sanity_check_lower_bound.Incremented();
-      YB_LOG_EVERY_N_SECS(WARNING, 5)
+      YB_LOG_EVERY_N_SECS(ERROR, 5) << LogPrefix()
           << "Assigning an artificially incremented hybrid time: " << incremented_hybrid_time
           << ". This needs to be investigated. " << get_details_msg(/* drain_aborted */ false);
       *ht = incremented_hybrid_time;
@@ -248,9 +248,21 @@ void MvccManager::UpdatePropagatedSafeTimeOnLeader(HybridTime ht_lease) {
   cond_.notify_all();
 }
 
+void MvccManager::SetLeaderOnlyMode(bool leader_only) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  leader_only_mode_ = leader_only;
+}
+
 HybridTime MvccManager::SafeTimeForFollower(
     HybridTime min_allowed, CoarseTimePoint deadline) const {
   std::unique_lock<std::mutex> lock(mutex_);
+
+  if (leader_only_mode_) {
+    // If there are no followers (RF == 1), use SafeTime()
+    // because propagated_safe_time_ can be not updated.
+    return DoGetSafeTime(min_allowed, deadline, HybridTime::kMax, &lock);
+  }
+
   SafeTimeWithSource result;
   auto predicate = [this, &result, min_allowed] {
     // last_replicated_ is updated earlier than propagated_safe_time_, so because of concurrency it
@@ -305,7 +317,6 @@ HybridTime MvccManager::DoGetSafeTime(const HybridTime min_allowed,
     if (queue_.empty()) {
       result = clock_->Now();
       source = SafeTimeSource::kNow;
-      CHECK_GE(result, min_allowed) << LogPrefix();
       VLOG_WITH_PREFIX(2) << "DoGetSafeTime, Now: " << result;
     } else {
       result = queue_.front().Decremented();

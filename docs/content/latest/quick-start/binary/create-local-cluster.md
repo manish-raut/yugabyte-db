@@ -1,10 +1,10 @@
 ## 1. Create a local cluster
 
-You can use the [`yb-ctl`](../../admin/yb-ctl/) utility, located in the `bin` directory of the Yugabyte DB package, to create and administer a local cluster. The default data directory is `$HOME/yugabyte-data`. You can change the location of the data directory by using the `--data_dir` option.
+You can use the [`yb-ctl`](../../admin/yb-ctl/) utility, located in the `bin` directory of the YugabyteDB package, to create and administer a local cluster. The default data directory is `$HOME/yugabyte-data`. You can change the location of the data directory by using the [`--data_dir` configuration option](../../admin/yb-ctl/#data-dir).
 
 To quickly create a 1-node or 3-node local cluster, follow the steps below. For details on using the `yb-ctl create` command and the cluster configuration, see [Create a local cluster](../../admin/yb-ctl/#create-cluster) in the utility reference.
 
-### Create a 1-node cluster with RF=1
+### Create a 1-node cluster with RF of 1
 
 To create a 1-node cluster with a replication factor (RF) of 1, run the following `yb-ctl create` command. 
 
@@ -14,25 +14,25 @@ $ ./bin/yb-ctl create
 
 The initial cluster creation may take a minute or so **without any output** on the prompt.
 
-### Create a 3-node cluster with RF=3
+### Create a 3-node cluster with RF of 3
 
-To run a distributed SQL cluster locally, you can quickly create a 3-node cluster with RF of 3 by running the following command.
+To run a distributed SQL cluster locally for testing and development, you can quickly create a 3-node cluster with RF of 3 by running the following command.
 
 ```sh
 $ ./bin/yb-ctl --rf 3 create
 ```
 
-You can now check `$HOME/yugabyte-data` to see `node-i` directories created where `i` represents the `node_id` of the node. Inside each such directory, there will be 2 disks `disk1` and `disk2` to highlight the fact that Yugabyte DB can work with multiple disks at the same time. Note that the IP address of `node-i` is by default set to `127.0.0.i`.
+You can now check `$HOME/yugabyte-data` to see `node-i` directories created where `i` represents the `node_id` of the node. Inside each such directory, there will be two disks, `disk1` and `disk2`, to highlight the fact that YugabyteDB can work with multiple disks at the same time. Note that the IP address of `node-i` is by default set to `127.0.0.i`.
 
 Clients can now connect to the YSQL and YCQL APIs at `localhost:5433` and `localhost:9042` respectively.
 
-## 2. Check cluster status with yb-ctl
+## 2. Check cluster status with "yb-ctl status"
 
-Run the `yb-ctl status` command to see the `yb-master` and `yb-tserver` processes running locally.
+To see the `yb-master` and `yb-tserver` processes running locally, run the `yb-ctl status` command.
 
 ### Example
 
-For a 1-node cluster, the `yb-ctl status` command will show that you have 1 `yb-master` process and 1 `yb-tserver` process running on the localhost. For details about the roles of these processes in a Yugabyte DB cluster (aka Universe), see [Universe](../../architecture/concepts/universe/).
+For a 1-node cluster, the `yb-ctl status` command will show that you have 1 `yb-master` process and 1 `yb-tserver` process running on the localhost. For details about the roles of these processes in a YugabyteDB cluster (aka Universe), see [Universe](../../architecture/concepts/universe/).
 
 ```sh
 $ ./bin/yb-ctl status
@@ -64,11 +64,11 @@ $ ./bin/yb-ctl status
 
 ## 3. Check cluster status with Admin UI
 
-Node 1's [master Admin UI](../../admin/yb-master/#admin-ui) is available at `http://127.0.0.1:7000` and the [tserver Admin UI](../../admin/yb-tserver/#admin-ui) is available at `http://127.0.0.1:9000`. If you created a multi-node cluster, you can visit the other nodes' Admin UIs by using their corresponding IP addresses.
+Node 1's [YB-Master Admin UI](../../reference/configuration/yb-master/#admin-ui) is available at `http://127.0.0.1:7000` and the [YB-TServer Admin UI](../../reference/configuration/yb-tserver/#admin-ui) is available at `http://127.0.0.1:9000`. If you created a multi-node cluster, you can visit the other nodes' Admin UIs by using their corresponding IP addresses.
 
 ### 3.1 Overview and Master status
 
-Node 1's master Admin UI home page shows that we have a cluster (aka a Universe) with `Replication Factor` of 1 and `Num Nodes (TServers)` as 1. The `Num User Tables` is 0 since there are no user tables created yet. Yugabyte DB version number is also shown for your reference.
+Node 1's master Admin UI home page shows that we have a cluster (aka a Universe) with `Replication Factor` of 1 and `Num Nodes (TServers)` as 1. The `Num User Tables` is 0 since there are no user tables created yet. YugabyteDB version number is also shown for your reference.
 
 ![master-home](/images/admin/master-home-binary-rf1.png)
 

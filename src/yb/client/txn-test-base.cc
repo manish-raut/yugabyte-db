@@ -18,10 +18,12 @@
 #include "yb/client/session.h"
 #include "yb/client/transaction.h"
 
+#include "yb/common/ql_value.h"
 #include "yb/consensus/consensus.h"
 
 #include "yb/tserver/mini_tablet_server.h"
 #include "yb/tserver/tablet_server.h"
+#include "yb/tserver/ts_tablet_manager.h"
 
 #include "yb/yql/cql/ql/util/statement_result.h"
 
@@ -78,7 +80,7 @@ void DisableApplyingIntents() {
 
 void CommitAndResetSync(YBTransactionPtr *txn) {
   CountDownLatch latch(1);
-  (*txn)->Commit([&latch](const Status& status) {
+  (*txn)->Commit(TransactionRpcDeadline(), [&latch](const Status& status) {
     ASSERT_OK(status);
     latch.CountDown(1);
   });
@@ -204,7 +206,7 @@ void TransactionTestBase::VerifyRows(
     auto rowblock = yb::ql::RowsResult(op.get()).GetRowBlock();
     ASSERT_EQ(rowblock->row_count(), 1);
     const auto& first_column = rowblock->row(0).column(0);
-    ASSERT_EQ(QLValue::InternalType::kInt32Value, first_column.type());
+    ASSERT_EQ(InternalType::kInt32Value, first_column.type());
     ASSERT_EQ(first_column.int32_value(), ValueForTransactionAndIndex(transaction, r, op_type));
   }
 }
@@ -247,16 +249,26 @@ bool TransactionTestBase::HasTransactions() {
   return false;
 }
 
+size_t TransactionTestBase::CountRunningTransactions() {
+  size_t result = 0;
+  auto peers = ListTabletPeers(cluster_.get(), ListPeersFilter::kAll);
+  for (const auto &peer : peers) {
+    auto participant = peer->tablet()->transaction_participant();
+    result += participant ? participant->TEST_GetNumRunningTransactions() : 0;
+  }
+  return result;
+}
+
 size_t TransactionTestBase::CountIntents() {
   size_t result = 0;
-  for (int i = 0; i != cluster_->num_tablet_servers(); ++i) {
-    auto* tablet_manager = cluster_->mini_tablet_server(i)->server()->tablet_manager();
-    auto peers = tablet_manager->GetTabletPeers();
-    for (const auto &peer : peers) {
-      auto participant = peer->tablet()->transaction_participant();
-      if (participant) {
-        result += participant->TEST_CountIntents();
-      }
+  auto peers = ListTabletPeers(cluster_.get(), ListPeersFilter::kAll);
+  for (const auto &peer : peers) {
+    auto participant = peer->tablet()->transaction_participant();
+    auto intents_count = participant ? participant->TEST_CountIntents() : 0;
+    if (intents_count) {
+      result += intents_count;
+      LOG(INFO) << Format("T $0 P $1: Intents present: $2", peer->tablet_id(),
+                          peer->permanent_uuid(), intents_count);
     }
   }
   return result;
@@ -267,20 +279,29 @@ void TransactionTestBase::CheckNoRunningTransactions() {
   bool has_bad = false;
   for (int i = 0; i != cluster_->num_tablet_servers(); ++i) {
     auto server = cluster_->mini_tablet_server(i)->server();
-    auto tablets = server->tablet_manager()->GetTabletPeers();
-    for (const auto& peer : tablets) {
-      auto status = Wait([peer] {
-            return peer->tablet() != nullptr;
-          },
-          deadline,
-          "Wait until peer has tablet");
-      if (!status.ok()) {
-        LOG(ERROR) << Format(
-            "Server: $0, tablet: $1, tablet object is not created",
-            server->permanent_uuid(), peer->tablet_id());
-        has_bad = true;
-        continue;
+    std::vector<std::shared_ptr<tablet::TabletPeer>> tablets;
+    auto status = Wait([server, &tablets] {
+      tablets.clear();
+      server->tablet_manager()->GetTabletPeers(&tablets);
+      for (const auto& peer : tablets) {
+        if (peer->tablet() == nullptr) {
+          return false;
+        }
       }
+      return true;
+    }, deadline, "Wait until all peers have tablets");
+    if (!status.ok()) {
+      has_bad = true;
+      for (const auto& peer : tablets) {
+        if (peer->tablet() == nullptr) {
+          LOG(ERROR) << Format(
+              "T $1 P $0: Tablet object is not created",
+              server->permanent_uuid(), peer->tablet_id());
+        }
+      }
+      continue;
+    }
+    for (const auto& peer : tablets) {
       auto participant = peer->tablet()->transaction_participant();
       if (participant) {
         auto status = Wait([participant] {

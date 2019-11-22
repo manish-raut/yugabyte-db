@@ -145,6 +145,21 @@ YBCStatus YBCPgExecDropDatabase(YBCPgStatement handle) {
   return ToYBCStatus(pgapi->ExecDropDatabase(handle));
 }
 
+YBCStatus YBCPgNewAlterDatabase(YBCPgSession pg_session,
+                               const char *database_name,
+                               const YBCPgOid database_oid,
+                               YBCPgStatement *handle) {
+  return ToYBCStatus(pgapi->NewAlterDatabase(pg_session, database_name, database_oid, handle));
+}
+
+YBCStatus YBCPgAlterDatabaseRenameDatabase(YBCPgStatement handle, const char *newname) {
+  return ToYBCStatus(pgapi->AlterDatabaseRenameDatabase(handle, newname));
+}
+
+YBCStatus YBCPgExecAlterDatabase(YBCPgStatement handle) {
+  return ToYBCStatus(pgapi->ExecAlterDatabase(handle));
+}
+
 YBCStatus YBCPgReserveOids(YBCPgSession pg_session,
                            const YBCPgOid database_oid,
                            const YBCPgOid next_oid,
@@ -438,13 +453,9 @@ YBCStatus YBCPgDmlExecWriteOp(YBCPgStatement handle, int32_t *rows_affected_coun
   return ToYBCStatus(pgapi->DmlExecWriteOp(handle, rows_affected_count));
 }
 
-YBCStatus YBCPgDmlAddYBTupleIdColumn(YBCPgStatement handle, int attr_num, uint64_t datum,
-                                     bool is_null, const YBCPgTypeEntity *type_entity) {
-  return ToYBCStatus(pgapi->DmlAddYBTupleIdColumn(handle, attr_num, datum, is_null, type_entity));
-}
-
-YBCStatus YBCPgDmlGetYBTupleId(YBCPgStatement handle, uint64_t *ybctid) {
-  return ToYBCStatus(pgapi->DmlGetYBTupleId(handle, ybctid));
+YBCStatus YBCPgDmlBuildYBTupleId(YBCPgStatement handle, const YBCPgAttrValueDescriptor *attrs,
+                                 int32_t nattrs, uint64_t *ybctid) {
+  return ToYBCStatus(pgapi->DmlBuildYBTupleId(handle, attrs, nattrs, ybctid));
 }
 
 // INSERT Operations -------------------------------------------------------------------------------
@@ -614,6 +625,14 @@ YBCStatus YBCGetSharedCatalogVersion(YBCPgSession pg_session, uint64_t* catalog_
     return YBCStatusOK();
   }
   return ToYBCStatus(result.status());
+}
+
+int32_t YBCGetMaxReadRestartAttempts() {
+  return FLAGS_ysql_max_read_restart_attempts;
+}
+
+int32_t YBCGetOutputBufferSize() {
+  return FLAGS_ysql_output_buffer_size;
 }
 
 } // extern "C"

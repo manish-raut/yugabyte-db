@@ -16,6 +16,8 @@
 #include "yb/common/partition.h"
 #include "yb/common/transaction.h"
 #include "yb/common/ql_scanspec.h"
+#include "yb/common/ql_value.h"
+
 #include "yb/docdb/doc_key.h"
 #include "yb/docdb/doc_ql_scanspec.h"
 #include "yb/docdb/doc_ttl_util.h"
@@ -31,8 +33,6 @@
 #include "yb/yql/pggate/util/pg_doc_data.h"
 
 using std::string;
-
-using yb::FormatRocksDBSliceAsStr;
 
 namespace yb {
 namespace docdb {
@@ -217,7 +217,7 @@ Status DiscreteScanChoices::DoneWithCurrentTarget() {
 Status DiscreteScanChoices::SkipTargetsUpTo(const Slice& new_target) {
   VLOG(2) << __PRETTY_FUNCTION__ << " Updating current target to be >= " << new_target;
   DCHECK(!FinishedWithScanChoices());
-  InitScanTargetRangeGroupIfNeeded();
+  RETURN_NOT_OK(InitScanTargetRangeGroupIfNeeded());
   DocKeyDecoder decoder(new_target);
   RETURN_NOT_OK(decoder.DecodeToRangeGroup());
   current_scan_target_.Reset(Slice(new_target.data(), decoder.left_input().data()));
@@ -659,7 +659,7 @@ Result<bool> DocRowwiseIterator::HasNext() const {
         (is_forward_scan_ ? iter_key_.CompareTo(key_data->key) >= 0
                           : iter_key_.CompareTo(key_data->key) <= 0)) {
       has_next_status_ = STATUS_SUBSTITUTE(Corruption, "Infinite loop detected at $0",
-                                           FormatRocksDBSliceAsStr(key_data->key));
+                                           FormatSliceAsStr(key_data->key));
       return has_next_status_;
     }
     iter_key_.Reset(key_data->key);

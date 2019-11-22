@@ -14,25 +14,27 @@ showAsideToc: true
 ---
 
 {{< note title="Note" >}}
-For any cluster, the number of nodes on which the YB-TServers need to be started on **must** equal or exceed the replication factor in order for any table to get created successfully.
+
+For any cluster, the number of nodes on which the YB-TServer services need to be started **must** equal, or exceed, the replication factor in order for any table to get created successfully.
+
 {{< /note >}}
 
 ## Example scenario
 
 Let us assume the following.
 
-- We want to create a a 4 node cluster with replication factor `3`.
+- We want to create a a 4-node cluster with replication factor of `3`.
       - We would need to run the YB-TServer process on all the 4 nodes say `node-a`, `node-b`, `node-c`, `node-d`
       - Let us assume the master private IP addresses are `172.151.17.130`, `172.151.17.220` and `172.151.17.140` (`node-a`, `node-b`, `node-c`)
 - We have multiple data drives mounted on `/home/centos/disk1`, `/home/centos/disk2`
 
-This section covers deployment for a single region/zone (or a single datacenter/rack). Execute the following steps on each of the instances.
+This section covers deployment for a single region/zone (or a single data center/rack). Execute the following steps on each of the instances.
 
-## Run yb-tserver with command line params
+## Run YB-TServer with command line options
 
-- Run `yb-tserver` as below. Note that all the master addresses have to be provided as a flag. For each yb-tserver, replace the rpc bind address flags with the private IP of the host running the yb-tserver.
+- Run the YB-TServer service (`yb-tserver`) as shown here. Note that all of the master addresses have to be provided using the `--tserver_master_addrs` option. For each YB-TServer, replace the RPC bind address configuration option with the private IP address of the YB-TServer service.
 
-For the full list of flags, see the [yb-tserver Reference](../../../admin/yb-tserver/).
+For the full list of configuration options, see the [YB-TServer reference](../../../reference/configuration/yb-tserver/).
 
 ```sh
 $ ./bin/yb-tserver \
@@ -45,15 +47,17 @@ $ ./bin/yb-tserver \
   >& /home/centos/disk1/yb-tserver.out &
 ```
 
-Add `--redis_proxy_bind_address=172.151.17.130:6379` to the above list if you need to turn on the YEDIS API as well.
+If you need to turn on the YEDIS API as well, add `--redis_proxy_bind_address=172.151.17.130:6379` to the above list.
 
 {{< note title="Note" >}}
-The number of comma seperated values in `tserver_master_addrs` parameter should match the total number of masters (aka replication factor).
+
+The number of comma-separated values in the `--tserver_master_addrs` option should match the total number of YB-Master services (or the replication factor).
+
 {{< /note >}}
 
-## Run yb-tserver with conf file
+## Run YB-TServer with configuration file
 
-- Alternatively, you can also create a `tserver.conf` file with the following flags and then run the `yb-tserver` with the `--flagfile` option as shown below. For each yb-tserver, replace the rpc bind address flags with the private IP of the host running the yb-tserver.
+- Alternatively, you can also create a `tserver.conf` file with the following flags and then run the `yb-tserver` with the `--flagfile` option as shown here. For each YB-TServer service, replace the RPC bind address flags with the private IP address of the host running the YB-TServer service.
 
 ```sh
 --tserver_master_addrs=172.151.17.130:7100,172.151.17.220:7100,172.151.17.140:7100
@@ -70,17 +74,9 @@ Add `--redis_proxy_bind_address=172.22.25.108:6379` to the above list if you nee
 $ ./bin/yb-tserver --flagfile tserver.conf >& /home/centos/disk1/yb-tserver.out &
 ```
 
-## Initialize YSQL
-
-On any yb-tserver or yb-master, run the following command.
-
-```sh
-YB_ENABLED_IN_POSTGRES=1 FLAGS_pggate_master_addresses=172.151.17.130:7100,172.151.17.220:7100,172.151.17.140:7100 /home/yugabyte/postgres/bin/initdb -D /tmp/yb_pg_initdb_tmp_data_dir -U postgres
-```
-
 ## Verify health
 
-- Make sure all the 4 yb-tservers are now working as expected by inspecting the INFO log. The default logs directory is always inside the first directory specified in the `--fs_data_dirs` flag.
+Make sure all four YB-TServer services are now working as expected by inspecting the INFO log. The default logs directory is always inside the first directory specified in the `--fs_data_dirs` flag.
 
 You can do this as shown below.
 
@@ -88,7 +84,7 @@ You can do this as shown below.
 $ cat /home/centos/disk1/yb-data/tserver/logs/yb-tserver.INFO
 ```
 
-In all the 4 yb-tserver logs, you should see log messages similar to the following.
+In each of the 4 YB-TServer logs, you should see log messages similar to the following.
 
 ```
 I0912 16:27:18.296516  8168 heartbeater.cc:305] Connected to a leader master server at 172.151.17.140:7100
@@ -103,7 +99,7 @@ I0912 16:27:18.311748  8142 rpc_server.cc:158] RPC server started. Bound to: 0.0
 I0912 16:27:18.311828  8142 tablet_server_main.cc:128] CQL server successfully started
 ```
 
-In the current yb-master leader log, you should see log messages similar to the following.
+In the current YB-Master leader log, you should see log messages similar to the following.
 
 ```
 I0912 22:26:32.832296  3162 ts_manager.cc:97] Registered new tablet server { permanent_uuid: "766ec935738f4ae89e5ff3ae26c66651" instance_seqno: 1505255192814357 } with Master
@@ -111,4 +107,8 @@ I0912 22:26:39.111896  3162 ts_manager.cc:97] Registered new tablet server { per
 I0912 22:26:41.055996  3162 ts_manager.cc:97] Registered new tablet server { permanent_uuid: "60042249ad9e45b5a5d90f10fc2320dc" instance_seqno: 1505255201010923 } with Master
 ```
 
-{{< tip title="Tip" >}}Remember to add the command with which you launched `yb-tserver` to a cron to restart it if it goes down.{{< /tip >}}<br>
+{{< tip title="Tip" >}}
+
+Remember to add the command you used to start the YB-TServer to a `cron` job to restart it if it goes down.
+
+{{< /tip >}}

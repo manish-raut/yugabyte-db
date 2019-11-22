@@ -45,7 +45,7 @@ Use the `CREATE TABLE AS` statement to create a new table using the output of a 
 
 ## Semantics
 
-Yugabyte DB may extend the syntax to allow specifying PRIMARY KEY for `CREATE TABLE AS` command.
+YugabyteDB may extend the syntax to allow specifying PRIMARY KEY for `CREATE TABLE AS` command.
 
 ### *create_table_as*
 
@@ -67,20 +67,20 @@ Specify the name of a column in the new table. When not specified, column names 
 
 ## Examples
 
-```sql
+```postgresql
 CREATE TABLE sample(k1 int, k2 int, v1 int, v2 text, PRIMARY KEY (k1, k2));
 ```
 
-```sql
+```postgresql
 INSERT INTO sample VALUES (1, 2.0, 3, 'a'), (2, 3.0, 4, 'b'), (3, 4.0, 5, 'c');
 ```
 
-```sql
+```postgresql
 CREATE TABLE selective_sample SELECT * FROM sample WHERE k1 > 1;
 ```
 
-```sql
-postgres=# SELECT * FROM selective_sample ORDER BY k1;
+```postgresql
+yugabyte=# SELECT * FROM selective_sample ORDER BY k1;
 ```
 
 ```

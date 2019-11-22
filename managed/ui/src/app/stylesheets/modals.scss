@@ -28,6 +28,11 @@
     width: auto;
     background-color: $YB_GRAY_HOVER;
   }
+
+  .alert {
+    margin-top: 15px;
+    margin-bottom: 0;
+  }
 }
 
 .modal-footer {
@@ -78,6 +83,12 @@
       vertical-align: middle;
       margin: 0;
     }
+  }
+}
+
+.form-group {
+  label {
+    min-height: 14px;
   }
 }
 

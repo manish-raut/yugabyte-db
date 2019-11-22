@@ -18,16 +18,21 @@ import static org.mockito.Matchers.anyLong;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static play.inject.Bindings.bind;
 import static play.mvc.Http.Status.OK;
 import static play.test.Helpers.contentAsString;
+import org.mockito.Mock;
 
 import java.util.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.yugabyte.yw.commissioner.CallHome;
 import com.yugabyte.yw.commissioner.Commissioner;
 import com.yugabyte.yw.commissioner.Common.CloudType;
+import com.yugabyte.yw.commissioner.HealthChecker;
 import com.yugabyte.yw.commissioner.tasks.CommissionerBaseTest;
+import com.yugabyte.yw.common.ApiHelper;
 import com.yugabyte.yw.common.ModelFactory;
 import com.yugabyte.yw.common.NodeActionType;
 import com.yugabyte.yw.common.services.YBClientService;
@@ -59,6 +64,24 @@ public class ImportControllerTest extends CommissionerBaseTest {
   private String authToken;
   private YBClient mockClient;
   private ListTabletServersResponse mockResponse;
+  @Mock
+  private ApiHelper mockApiHelper;
+
+  @Override
+  protected Application provideApplication() {
+    mockApiHelper = mock(ApiHelper.class);
+    mockYBClient = mock(YBClientService.class);
+    mockCallHome = mock(CallHome.class);
+    mockHealthChecker = mock(HealthChecker.class);
+
+    return new GuiceApplicationBuilder()
+        .configure((Map) Helpers.inMemoryDatabase())
+        .overrides(bind(YBClientService.class).toInstance(mockYBClient))
+        .overrides(bind(HealthChecker.class).toInstance(mockHealthChecker))
+        .overrides(bind(CallHome.class).toInstance(mockCallHome))
+        .overrides(bind(ApiHelper.class).toInstance(mockApiHelper))
+        .build();
+  }
 
   @Before
   public void setUp() {
@@ -66,6 +89,8 @@ public class ImportControllerTest extends CommissionerBaseTest {
     authToken = customer.createAuthToken();
     mockClient = mock(YBClient.class);
     mockResponse = mock(ListTabletServersResponse.class);
+    when(mockApiHelper.getRequest(any(String.class))).thenReturn(Json.newObject());
+    when(mockYBClient.getClient(any(), any())).thenReturn(mockClient);
     when(mockYBClient.getClient(any())).thenReturn(mockClient);
     when(mockClient.waitForServer(any(), anyLong())).thenReturn(true);
     when(mockResponse.getTabletServersCount()).thenReturn(3);
@@ -85,7 +110,7 @@ public class ImportControllerTest extends CommissionerBaseTest {
     }
   }
 
-  @Ignore
+  @Test
   public void testImportUniverse() {
     String url = "/api/customers/" + customer.uuid + "/universes/import";
     ObjectNode bodyJson = Json.newObject()
@@ -140,7 +165,9 @@ public class ImportControllerTest extends CommissionerBaseTest {
     assertEquals(universe.getUniverseDetails().importedState, ImportedState.TSERVERS_ADDED);
     assertEquals(universe.getUniverseDetails().capability, Capability.READ_ONLY);
 
-    // Finish
+    // Finish. Default expectation is that imported universes do not have node exporter running.
+    when(mockApiHelper.getBody(any())).thenReturn("Connection refused");
+    when(mockApiHelper.getHeaderStatus(any())).thenReturn(Json.newObject().put("status", "OK"));
     bodyJson.put("currentState", json.get("state").asText());
     result = doRequestWithAuthTokenAndBody("POST", url, authToken, bodyJson);
     assertOk(result);
@@ -168,7 +195,7 @@ public class ImportControllerTest extends CommissionerBaseTest {
     for (Iterator<JsonNode> it = nodeDetailsMap.elements(); it.hasNext();) {
       JsonNode node = it.next();
       int nodeIdx = node.get("nodeIdx").asInt();
-      assertValue(node, "nodeName", "yb-importUniv-n" + nodeIdx);
+      assertValue(node, "nodeName", "yb-tc-importUniv-n" + nodeIdx);
       assertThat(node.get("cloudInfo").get("private_ip").asText(),
                  allOf(notNullValue(), containsString("127.0.0")));
       numNodes++;
@@ -176,14 +203,14 @@ public class ImportControllerTest extends CommissionerBaseTest {
     assertEquals(3, numNodes);
 
     // Provider should have the instance type.
-    UUID provUUID = Provider.get(customer.uuid, CloudType.other).uuid;
+    UUID provUUID = Provider.get(customer.uuid, CloudType.local).uuid;
     url = "/api/customers/" + customer.uuid + "/providers/" + provUUID + "/instance_types/" +
           ImportUniverseFormData.DEFAULT_INSTANCE;
     result = doRequestWithAuthToken("GET", url, authToken);
     assertOk(result);
     json = Json.parse(contentAsString(result));
     assertEquals(json.get("instanceTypeCode").asText(), ImportUniverseFormData.DEFAULT_INSTANCE);
-    assertEquals(json.get("providerCode").asText(), CloudType.other.name());
+    assertEquals(json.get("providerCode").asText(), CloudType.local.toString());
 
     // Edit should fail.
     bodyJson = Json.newObject();

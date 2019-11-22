@@ -14,8 +14,9 @@ create table alert (
   uuid                          uuid not null,
   customer_uuid                 uuid not null,
   create_time                   timestamp not null,
+  err_code                      Text not null,
   type                          varchar(255),
-  message                       TEXT not null,
+  message                       Text not null,
   constraint pk_alert primary key (uuid)
 );
 
@@ -38,7 +39,7 @@ create table backup (
   task_uuid                     uuid,
   create_time                   timestamp not null,
   update_time                   timestamp not null,
-  constraint ck_backup_state check (state in ('Failed','Completed','In Progress','Deleted')),
+  constraint ck_backup_state check (state in ('Failed','Skipped','Completed','In Progress','Deleted')),
   constraint uq_backup_task_uuid unique (task_uuid),
   constraint pk_backup primary key (backup_uuid)
 );
@@ -90,12 +91,12 @@ create table customer_task (
   task_uuid                     uuid not null,
   target_type                   varchar(8) not null,
   target_name                   varchar(255) not null,
-  type                          varchar(15) not null,
+  type                          varchar(19) not null,
   target_uuid                   uuid not null,
   create_time                   timestamp not null,
   completion_time               timestamp,
   constraint ck_customer_task_target_type check (target_type in ('Table','Node','Backup','Universe','Cluster','Provider')),
-  constraint ck_customer_task_type check (type in ('Delete','Add','Stop','Start','Create','UpgradeSoftware','Remove','Update','Restore','Release','UpgradeGflags','BulkImportData')),
+  constraint ck_customer_task_type check (type in ('Delete','Add','Stop','Start','Backup','UpgradeSoftware','Remove','Update','Restore','BulkImportData','RotateEncryptionKey','Create','Release','UpgradeGflags')),
   constraint pk_customer_task primary key (id)
 );
 create sequence customer_task_id_seq increment by 1;
@@ -116,6 +117,27 @@ create table instance_type (
   mem_size_gb                   float not null,
   instance_type_details_json    TEXT,
   constraint pk_instance_type primary key (provider_code,instance_type_code)
+);
+
+create table kms_config (
+  config_uuid                   uuid not null,
+  customer_uuid                 uuid not null,
+  key_provider                  varchar(100) not null,
+  auth_config                   TEXT not null,
+  version                       integer not null,
+  constraint ck_kms_config_key_provider check (key_provider in ('SMARTKEY','AWS')),
+  constraint pk_kms_config primary key (config_uuid)
+);
+
+create table kms_history (
+  config_uuid                   uuid not null,
+  target_uuid                   uuid not null,
+  type                          varchar(12) not null,
+  timestamp                     timestamp not null,
+  version                       integer not null,
+  key_ref                       varchar(255) not null,
+  constraint ck_kms_history_type check (type in ('UNIVERSE_KEY')),
+  constraint pk_kms_history primary key (config_uuid,target_uuid,type)
 );
 
 create table metric_config (
@@ -174,7 +196,8 @@ create table schedule (
   task_params                   TEXT not null,
   task_type                     varchar(29) not null,
   status                        varchar(7) not null,
-  constraint ck_schedule_task_type check (task_type in ('CloudBootstrap','CloudCleanup','CreateCassandraTable','CreateUniverse','ReadOnlyClusterCreate','ReadOnlyClusterDelete','CreateKubernetesUniverse','DestroyUniverse','DestroyKubernetesUniverse','DeleteTable','BackupUniverse','EditUniverse','EditKubernetesUniverse','KubernetesProvision','ImportIntoTable','UpgradeUniverse','UpgradeKubernetesUniverse','DeleteNodeFromUniverse','StopNodeInUniverse','StartNodeInUniverse','AddNodeToUniverse','RemoveNodeFromUniverse','ReleaseInstanceFromUniverse','AnsibleClusterServerCtl','AnsibleConfigureServers','AnsibleDestroyServer','AnsibleSetupServer','AnsibleUpdateNodeInfo','BulkImport','ChangeMasterConfig','CreateTable','DeleteNode','UpdateNodeProcess','DeleteTableFromUniverse','LoadBalancerStateChange','ModifyBlackList','ManipulateDnsRecordTask','RemoveUniverseEntry','SetNodeState','SwamperTargetsFileUpdate','UniverseUpdateSucceeded','UpdateAndPersistGFlags','UpdatePlacementInfo','UpdateSoftwareVersion','WaitForDataMove','WaitForLoadBalance','WaitForMasterLeader','WaitForServer','WaitForTServerHeartBeats','DeleteClusterFromUniverse','InstanceActions','WaitForServerReady','CloudAccessKeyCleanup','CloudAccessKeySetup','CloudInitializer','CloudProviderCleanup','CloudRegionCleanup','CloudRegionSetup','CloudSetup','BackupTable','WaitForLeadersOnPreferredOnly','KubernetesCommandExecutor','KubernetesWaitForPod')),
+  cron_expression               varchar(255),
+  constraint ck_schedule_task_type check (task_type in ('CloudBootstrap','CloudCleanup','CreateCassandraTable','CreateUniverse','ReadOnlyClusterCreate','ReadOnlyClusterDelete','CreateKubernetesUniverse','DestroyUniverse','DestroyKubernetesUniverse','DeleteTable','BackupUniverse','MultiTableBackup','EditUniverse','EditKubernetesUniverse','KubernetesProvision','ImportIntoTable','UpgradeUniverse','UpgradeKubernetesUniverse','DeleteNodeFromUniverse','StopNodeInUniverse','StartNodeInUniverse','AddNodeToUniverse','RemoveNodeFromUniverse','ReleaseInstanceFromUniverse','RotateUniverseKey','RotateKubernetesUniverseKey','AnsibleClusterServerCtl','AnsibleConfigureServers','AnsibleDestroyServer','AnsibleSetupServer','AnsibleUpdateNodeInfo','BulkImport','ChangeMasterConfig','CreateTable','DeleteNode','UpdateNodeProcess','DeleteTableFromUniverse','LoadBalancerStateChange','ModifyBlackList','ManipulateDnsRecordTask','RemoveUniverseEntry','SetNodeState','SwamperTargetsFileUpdate','UniverseUpdateSucceeded','UpdateAndPersistGFlags','UpdatePlacementInfo','UpdateSoftwareVersion','WaitForDataMove','WaitForLoadBalance','WaitForMasterLeader','WaitForServer','WaitForTServerHeartBeats','DeleteClusterFromUniverse','InstanceActions','WaitForServerReady','CloudAccessKeyCleanup','CloudAccessKeySetup','CloudInitializer','CloudProviderCleanup','CloudRegionCleanup','CloudRegionSetup','CloudSetup','BackupTable','WaitForLeadersOnPreferredOnly','EnableEncryptionAtRest','KubernetesCommandExecutor','KubernetesWaitForPod')),
   constraint ck_schedule_status check (status in ('Active','Stopped','Paused')),
   constraint pk_schedule primary key (schedule_uuid)
 );
@@ -199,9 +222,9 @@ create table task_info (
   owner                         varchar(255) not null,
   create_time                   timestamp not null,
   update_time                   timestamp not null,
-  constraint ck_task_info_task_type check (task_type in ('CloudBootstrap','CloudCleanup','CreateCassandraTable','CreateUniverse','ReadOnlyClusterCreate','ReadOnlyClusterDelete','CreateKubernetesUniverse','DestroyUniverse','DestroyKubernetesUniverse','DeleteTable','BackupUniverse','EditUniverse','EditKubernetesUniverse','KubernetesProvision','ImportIntoTable','UpgradeUniverse','UpgradeKubernetesUniverse','DeleteNodeFromUniverse','StopNodeInUniverse','StartNodeInUniverse','AddNodeToUniverse','RemoveNodeFromUniverse','ReleaseInstanceFromUniverse','AnsibleClusterServerCtl','AnsibleConfigureServers','AnsibleDestroyServer','AnsibleSetupServer','AnsibleUpdateNodeInfo','BulkImport','ChangeMasterConfig','CreateTable','DeleteNode','UpdateNodeProcess','DeleteTableFromUniverse','LoadBalancerStateChange','ModifyBlackList','ManipulateDnsRecordTask','RemoveUniverseEntry','SetNodeState','SwamperTargetsFileUpdate','UniverseUpdateSucceeded','UpdateAndPersistGFlags','UpdatePlacementInfo','UpdateSoftwareVersion','WaitForDataMove','WaitForLoadBalance','WaitForMasterLeader','WaitForServer','WaitForTServerHeartBeats','DeleteClusterFromUniverse','InstanceActions','WaitForServerReady','CloudAccessKeyCleanup','CloudAccessKeySetup','CloudInitializer','CloudProviderCleanup','CloudRegionCleanup','CloudRegionSetup','CloudSetup','BackupTable','WaitForLeadersOnPreferredOnly','KubernetesCommandExecutor','KubernetesWaitForPod')),
+  constraint ck_task_info_task_type check (task_type in ('CloudBootstrap','CloudCleanup','CreateCassandraTable','CreateUniverse','ReadOnlyClusterCreate','ReadOnlyClusterDelete','CreateKubernetesUniverse','DestroyUniverse','DestroyKubernetesUniverse','DeleteTable','BackupUniverse','MultiTableBackup','EditUniverse','EditKubernetesUniverse','KubernetesProvision','ImportIntoTable','UpgradeUniverse','UpgradeKubernetesUniverse','DeleteNodeFromUniverse','StopNodeInUniverse','StartNodeInUniverse','AddNodeToUniverse','RemoveNodeFromUniverse','ReleaseInstanceFromUniverse','RotateUniverseKey','RotateKubernetesUniverseKey','AnsibleClusterServerCtl','AnsibleConfigureServers','AnsibleDestroyServer','AnsibleSetupServer','AnsibleUpdateNodeInfo','BulkImport','ChangeMasterConfig','CreateTable','DeleteNode','UpdateNodeProcess','DeleteTableFromUniverse','LoadBalancerStateChange','ModifyBlackList','ManipulateDnsRecordTask','RemoveUniverseEntry','SetNodeState','SwamperTargetsFileUpdate','UniverseUpdateSucceeded','UpdateAndPersistGFlags','UpdatePlacementInfo','UpdateSoftwareVersion','WaitForDataMove','WaitForLoadBalance','WaitForMasterLeader','WaitForServer','WaitForTServerHeartBeats','DeleteClusterFromUniverse','InstanceActions','WaitForServerReady','CloudAccessKeyCleanup','CloudAccessKeySetup','CloudInitializer','CloudProviderCleanup','CloudRegionCleanup','CloudRegionSetup','CloudSetup','BackupTable','WaitForLeadersOnPreferredOnly','EnableEncryptionAtRest','KubernetesCommandExecutor','KubernetesWaitForPod')),
   constraint ck_task_info_task_state check (task_state in ('Unknown','Running','Success','Failure','Created','Initializing')),
-  constraint ck_task_info_sub_task_group_type check (sub_task_group_type in ('Invalid','Provisioning','UpgradingSoftware','DownloadingSoftware','InstallingSoftware','ConfigureUniverse','WaitForDataMigration','RemovingUnusedServers','UpdatingGFlags','BootstrappingCloud','BootstrappingRegion','CreateAccessKey','InitializeCloudMetadata','CleanupCloud','CreatingTable','ImportingData','DeletingNode','StoppingNode','StartingNode','StartingNodeProcesses','StoppingNodeProcesses','AddingNode','RemovingNode','ReleasingInstance','DeletingTable','CreatingTableBackup','RestoringTableBackup','CreateNamespace','ApplySecret','HelmInit','HelmInstall','UpdateNumNodes','HelmDelete','KubernetesVolumeDelete','KubernetesNamespaceDelete','KubernetesPodInfo','KubernetesWaitForPod','HelmUpgrade','KubernetesUpgradePod','KubernetesInitYSQL')),
+  constraint ck_task_info_sub_task_group_type check (sub_task_group_type in ('Invalid','Provisioning','UpgradingSoftware','DownloadingSoftware','InstallingSoftware','ConfigureUniverse','WaitForDataMigration','RemovingUnusedServers','UpdatingGFlags','BootstrappingCloud','BootstrappingRegion','CreateAccessKey','InitializeCloudMetadata','CleanupCloud','CreatingTable','ImportingData','DeletingNode','StoppingNode','StartingNode','StartingNodeProcesses','StoppingNodeProcesses','AddingNode','RemovingNode','ReleasingInstance','DeletingTable','CreatingTableBackup','RestoringTableBackup','CreateNamespace','ApplySecret','HelmInit','HelmInstall','UpdateNumNodes','HelmDelete','KubernetesVolumeDelete','KubernetesNamespaceDelete','KubernetesPodInfo','KubernetesWaitForPod','HelmUpgrade','KubernetesUpgradePod','KubernetesInitYSQL','CopyEncryptionKeyFile')),
   constraint pk_task_info primary key (uuid)
 );
 
@@ -211,6 +234,7 @@ create table universe (
   creation_date                 timestamp not null,
   name                          varchar(255),
   customer_id                   bigint,
+  config                        TEXT,
   universe_details_json         TEXT not null,
   constraint uq_universe_name_customer_id unique (name,customer_id),
   constraint pk_universe primary key (universe_uuid)
@@ -261,6 +285,10 @@ drop sequence if exists customer_task_id_seq;
 drop table if exists health_check;
 
 drop table if exists instance_type;
+
+drop table if exists kms_config;
+
+drop table if exists kms_history;
 
 drop table if exists metric_config;
 

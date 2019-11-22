@@ -67,6 +67,7 @@
 #include "yb/util/net/sockaddr.h"
 #include "yb/util/status.h"
 #include "yb/util/threadpool.h"
+#include "yb/util/shared_lock.h"
 
 DEFINE_int32(master_rpc_timeout_ms, 1500,
              "Timeout for retrieving master registration over RPC.");
@@ -138,6 +139,10 @@ Master::Master(const MasterOptions& opts)
   SetConnectionContextFactory(rpc::CreateConnectionContextFactory<rpc::YBInboundConnectionContext>(
       GetAtomicFlag(&FLAGS_inbound_rpc_memory_limit),
       mem_tracker()));
+
+  LOG(INFO) << "yb::master::Master created at " << this;
+  LOG(INFO) << "yb::master::TSManager created at " << ts_manager_.get();
+  LOG(INFO) << "yb::master::CatalogManager created at " << catalog_manager_.get();
 }
 
 Master::~Master() {

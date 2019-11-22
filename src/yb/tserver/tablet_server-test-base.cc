@@ -32,6 +32,7 @@
 #include "yb/tserver/mini_tablet_server.h"
 #include "yb/tserver/tablet_server.h"
 #include "yb/tserver/tablet_server_test_util.h"
+#include "yb/tserver/ts_tablet_manager.h"
 #include "yb/tserver/tserver_admin.proxy.h"
 
 #include "yb/util/test_graph.h"
@@ -339,7 +340,8 @@ void TabletServerTestBase::VerifyRows(const Schema& schema, const vector<KeyValu
   ASSERT_EQ(count, expected.size());
 }
 
-const client::YBTableName TabletServerTestBase::kTableName("my_keyspace", "test-table");
+const client::YBTableName TabletServerTestBase::kTableName(
+    YQL_DATABASE_CQL, "my_keyspace", "test-table");
 const char* TabletServerTestBase::kTabletId = "test-tablet";
 
 } // namespace tserver

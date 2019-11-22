@@ -962,11 +962,6 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 			case ROW_MARK_SHARE:
 			case ROW_MARK_KEYSHARE:
 				relation = heap_open(relid, RowShareLock);
-				if (IsYBRelation(relation)) 
-				{
-					YBRaiseNotSupported("SELECT locking option only supported for temporary tables",
-										1199);
-				}
 				break;
 			case ROW_MARK_REFERENCE:
 				relation = heap_open(relid, AccessShareLock);

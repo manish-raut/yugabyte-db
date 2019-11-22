@@ -89,7 +89,10 @@ class YBInboundConnectionContext : public YBConnectionContext {
 
   std::weak_ptr<Connection> connection_;
 
+  // Last time data was sent to network layer below application.
   CoarseTimePoint last_write_time_;
+  // Last time we queued heartbeat for sending.
+  CoarseTimePoint last_heartbeat_sending_time_;
 };
 
 class YBInboundCall : public InboundCall {
@@ -180,7 +183,7 @@ class YBInboundCall : public InboundCall {
  protected:
   // Vector of additional sidecars that are tacked on to the call's response
   // after serialization of the protobuf. See rpc/rpc_sidecar.h for more info.
-  std::vector<RefCntBuffer> sidecars_;
+  boost::container::small_vector<RefCntBuffer, kMinBufferForSidecarSlices> sidecars_;
 
   // Serialize and queue the response.
   virtual void Respond(const google::protobuf::MessageLite& response, bool is_success);

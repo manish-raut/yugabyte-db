@@ -11,25 +11,25 @@ isTocNested: true
 showAsideToc: true
 ---
 
-The [Hasura GraphQL engine](https://hasura.io) is an [open source](https://github.com/hasura/graphql-engine) GraphQL server that can be integrated with Yugabyte DB to provide GraphQL on your Yugabyte DB databases and applications.
+The [Hasura GraphQL engine](https://hasura.io) is an [open source](https://github.com/hasura/graphql-engine) GraphQL server that can be integrated with YugabyteDB to provide GraphQL on your YugabyteDB databases and applications.
 
-Follow the steps below to learn how easily you can begin using the Hasura GraphQL engine with Yugabyte DB. For details on using the Hasura GraphQL engine, see the [Hasura GraphQL engine documentation](https://docs.hasura.io).
+Follow the steps below to learn how easily you can begin using the Hasura GraphQL engine with YugabyteDB. For details on using the Hasura GraphQL engine, see the [Hasura GraphQL engine documentation](https://docs.hasura.io).
 
 ## Before you begin
 
-### Install and start Yugabyte DB
+### Install and start YugabyteDB
 
-If you're new to Yugabyte DB, you can be up and running with Yugabyte DB in under five minutes by following the steps in [Quick start](https://docs.yugabyte.com/latest/quick-start/).
+If you're new to YugabyteDB, you can be up and running with YugabyteDB in under five minutes by following the steps in [Quick start](https://docs.yugabyte.com/latest/quick-start/).
 
 ### Install and start Hasura
 
 To install the Hasura GraphQL engine, follow the steps in Hasura's [Quick start with Docker](https://docs.hasura.io/1.0/graphql/manual/getting-started/docker-simple.html).
 
-To use Hasura with Yugabyte DB, the configuration should be similar to PostgreSQL, but the port should be `5433` and the transaction isolation level should be set to `SERIALIZABLE`. 
+To use Hasura with YugabyteDB, the configuration should be similar to PostgreSQL, but the port should be `5433` and the transaction isolation level should be set to `SERIALIZABLE`. 
 
 For a local Mac setup, the configuration should be:
 
-```
+```sh
 docker run -d -p 8080:8080 \
        -e HASURA_GRAPHQL_DATABASE_URL=postgres://postgres:@host.docker.internal:5433/postgres \
        -e HASURA_GRAPHQL_ENABLE_CONSOLE=true \
@@ -37,7 +37,7 @@ docker run -d -p 8080:8080 \
        hasura/graphql-engine:v1.0.0-beta.6
 ```
 
-The `HASURA_GRAPHQL_TX_ISOLATION` setting is a temporary requirement due to a Yugabyte DB issue involving the locking of foreign keys ([GitHub issue #1199](https://github.com/yugabyte/yugabyte-db/issues/1199)).
+The `HASURA_GRAPHQL_TX_ISOLATION` setting is a temporary requirement due to a YugabyteDB issue involving the locking of foreign keys ([GitHub issue #1199](https://github.com/yugabyte/yugabyte-db/issues/1199)).
 
 {{< note title="Note" >}}
 
@@ -47,7 +47,7 @@ Make sure that the release version specified for `hasura/graphql-engine` matches
 
 To start Hasura, run the following script:
 
-```bash
+```sh
 ./docker-run.sh
 ```
 
@@ -57,7 +57,7 @@ This initialization step may take a minute or more.
 
 To check the Docker logs, you can use the container ID returned by the command above:
 
-```bash
+```sh
 docker logs <container-id>
 ```
 
@@ -111,15 +111,15 @@ Click **Add**, and then click **Save**.
 
 ### 5. Load sample data
 
-1. On the command line, change your directory to the root `yugabyte` directory, and then open `ysqlsh` (the YSQL CLI) to connect to the Yugabyte cluster:
+1. On the command line, change your directory to the root `yugabyte` directory, and then open `ysqlsh` (the YSQL CLI) to connect to the YugabyteDB cluster:
 
-```bash
+```sh
 ./bin/ysqlsh
 ```
 
-2. Copy the commands below into the shell and press **Enter**.
+1. Copy the commands below into the shell and press **Enter**.
 
-```sql
+```postgresql
 SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE
 INSERT INTO author(name) VALUES ('John Doe'), ('Jane Doe')
 INSERT INTO article(title, content, rating, author_id) 
@@ -144,7 +144,7 @@ Go back to the Hasura UI, click the **GRAPHQL** tab on top.
 
 Fetch a list of articles and sort each article’s author in descending order and by rating.
 
-```json
+```graphql
 {
   article(order_by: {rating: desc}) {
     id
@@ -163,7 +163,7 @@ Fetch a list of articles and sort each article’s author in descending order an
 
 Fetch a list of authors and a nested list of each author’s articles where the authors are ordered by descending by the average ratings of their articles, and their article lists are ordered by title.
 
- ```json
+ ```graphql
  {
    author(order_by: {articles_aggregate: {avg: {rating: desc}}}) {
      name
@@ -182,26 +182,26 @@ Fetch a list of authors and a nested list of each author’s articles where the 
 
 Now that you're done with this exploration, you can clean up the pieces for your next adventure.
 
-1. Stop the Yugabyte cluster by running the `yb-ctl stop` command.
+1. Stop the YugabyteDB cluster by running the `yb-ctl stop` command.
 
-    ```bash
+    ```sh
     ./bin/yb-ctl stop
     ```
 
-    Note: To completely remove all Yugabyte data/cluster-state you can instead run:
+    Note: To completely remove all YugabyteDB data/cluster-state you can instead run:
 
-    ```bash
+    ```sh
     ./bin/yb-ctl destroy
     ```
 
 2. Stop The Hasura container,
 
-    ```bash
+    ```sh
     docker stop <container-id>
     ```
 
     You can list running containers using the following command:
 
-    ```bash
+    ```sh
     docker ps
     ```

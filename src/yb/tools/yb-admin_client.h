@@ -99,7 +99,7 @@ class ClusterAdminClient {
   CHECKED_STATUS DumpMasterState();
 
   // List all the tables.
-  CHECKED_STATUS ListTables();
+  CHECKED_STATUS ListTables(bool include_db_type);
 
   // List all tablets of this table
   CHECKED_STATUS ListTablets(const client::YBTableName& table_name, int max_tablets);
@@ -126,6 +126,8 @@ class ClusterAdminClient {
 
   CHECKED_STATUS GetLoadMoveCompletion();
 
+  CHECKED_STATUS GetLeaderBlacklistCompletion();
+
   CHECKED_STATUS GetIsLoadBalancerIdle();
 
   CHECKED_STATUS ListLeaderCounts(const client::YBTableName& table_name);
@@ -138,20 +140,27 @@ class ClusterAdminClient {
                             int timeout_secs,
                             bool is_compaction);
 
-  CHECKED_STATUS ModifyPlacementInfo(std::string placement_infos, int replication_factor);
+  CHECKED_STATUS ModifyPlacementInfo(std::string placement_infos,
+                                     int replication_factor,
+                                     const std::string& optional_uuid);
 
   CHECKED_STATUS AddReadReplicaPlacementInfo(const std::string& placement_info,
-                                             int replication_factor);
+                                             int replication_factor,
+                                             const std::string& optional_uuid);
 
   CHECKED_STATUS ModifyReadReplicaPlacementInfo(const std::string& placement_uuid,
                                                 const std::string& placement_info,
                                                 int replication_factor);
 
-  CHECKED_STATUS DeleteReadReplicaPlacementInfo(const std::string& placement_uuid);
+  CHECKED_STATUS DeleteReadReplicaPlacementInfo();
 
   CHECKED_STATUS GetUniverseConfig();
 
-  CHECKED_STATUS ChangeBlacklist(const std::vector<HostPort>& servers, bool add);
+  CHECKED_STATUS ChangeBlacklist(const std::vector<HostPort>& servers, bool add,
+      bool blacklist_leader);
+
+  Result<const master::NamespaceIdentifierPB&> GetNamespaceInfo(YQLDatabase db_type,
+                                                                const std::string& namespace_name);
 
  protected:
   // Fetch the locations of the replicas for a given tablet from the Master.
@@ -223,12 +232,25 @@ class ClusterAdminClient {
       Status (Object::*func)(const Request&, Response*, rpc::RpcController*),
       Object* obj, const Request& req, const char* error_message = nullptr);
 
+ private:
+  using NamespaceMap = std::unordered_map<NamespaceId, master::NamespaceIdentifierPB>;
+  Result<const NamespaceMap&> GetNamespaceMap();
+
+  NamespaceMap namespace_map_;
+
   DISALLOW_COPY_AND_ASSIGN(ClusterAdminClient);
 };
 
 static constexpr const char* kColumnSep = " \t";
 
 std::string RightPadToUuidWidth(const std::string &s);
+
+struct TypedNamespaceName {
+  YQLDatabase db_type;
+  std::string name;
+};
+
+Result<TypedNamespaceName> ParseNamespaceName(const std::string& full_namespace_name);
 
 }  // namespace tools
 }  // namespace yb

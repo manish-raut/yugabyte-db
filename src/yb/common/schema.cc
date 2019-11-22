@@ -83,6 +83,10 @@ void TableProperties::ToTablePropertiesPB(TablePropertiesPB *pb) const {
   if (HasCopartitionTableId()) {
     pb->set_copartition_table_id(copartition_table_id_);
   }
+  pb->set_use_mangled_column_name(use_mangled_column_name_);
+  if (HasNumTablets()) {
+    pb->set_num_tablets(num_tablets_);
+  }
 }
 
 TableProperties TableProperties::FromTablePropertiesPB(const TablePropertiesPB& pb) {
@@ -102,6 +106,12 @@ TableProperties TableProperties::FromTablePropertiesPB(const TablePropertiesPB& 
   if (pb.has_copartition_table_id()) {
     table_properties.SetCopartitionTableId(pb.copartition_table_id());
   }
+  if (pb.has_use_mangled_column_name()) {
+    table_properties.SetUseMangledColumnName(pb.use_mangled_column_name());
+  }
+  if (pb.has_num_tablets()) {
+    table_properties.SetNumTablets(pb.num_tablets());
+  }
   return table_properties;
 }
 
@@ -118,6 +128,12 @@ void TableProperties::AlterFromTablePropertiesPB(const TablePropertiesPB& pb) {
   if (pb.has_copartition_table_id()) {
     SetCopartitionTableId(pb.copartition_table_id());
   }
+  if (pb.has_use_mangled_column_name()) {
+    SetUseMangledColumnName(pb.use_mangled_column_name());
+  }
+  if (pb.has_num_tablets()) {
+    SetNumTablets(pb.num_tablets());
+  }
 }
 
 void TableProperties::Reset() {
@@ -126,6 +142,8 @@ void TableProperties::Reset() {
   is_transactional_ = false;
   consistency_level_ = YBConsistencyLevel::STRONG;
   copartition_table_id_ = kNoCopartitionTableId;
+  use_mangled_column_name_ = false;
+  num_tablets_ = 0;
 }
 
 Schema::Schema(const Schema& other)

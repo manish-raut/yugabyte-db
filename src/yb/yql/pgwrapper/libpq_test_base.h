@@ -23,7 +23,8 @@ namespace pgwrapper {
 class LibPqTestBase : public PgWrapperTestBase {
  protected:
   void SetUp() override;
-  Result<PGConnPtr> Connect();
+  Result<PGConn> Connect();
+  Result<PGConn> ConnectToDB(const string& db_name);
   static bool TransactionalFailure(const Status& status);
 };
 

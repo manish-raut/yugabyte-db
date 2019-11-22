@@ -43,6 +43,7 @@
 #include "yb/common/redis_protocol.pb.h"
 #include "yb/common/ql_protocol.pb.h"
 #include "yb/common/ql_rowblock.h"
+#include "yb/common/ql_value.h"
 
 #include "yb/docdb/doc_key.h"
 
@@ -501,6 +502,10 @@ YBPgsqlWriteOp *YBPgsqlWriteOp::NewUpdate(const std::shared_ptr<YBTable>& table)
 
 YBPgsqlWriteOp *YBPgsqlWriteOp::NewDelete(const std::shared_ptr<YBTable>& table) {
   return NewYBPgsqlWriteOp(table, PgsqlWriteRequestPB::PGSQL_DELETE);
+}
+
+YBPgsqlWriteOp *YBPgsqlWriteOp::NewUpsert(const std::shared_ptr<YBTable>& table) {
+  return NewYBPgsqlWriteOp(table, PgsqlWriteRequestPB::PGSQL_UPSERT);
 }
 
 std::string YBPgsqlWriteOp::ToString() const {

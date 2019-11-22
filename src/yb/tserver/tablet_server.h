@@ -100,7 +100,7 @@ class TabletServer : public server::RpcAndWebServerBase, public TabletServerIf {
   std::string ToString() const override;
 
   TSTabletManager* tablet_manager() override { return tablet_manager_.get(); }
-  TabletPeerLookupIf* tablet_peer_lookup() override { return tablet_manager_.get(); }
+  TabletPeerLookupIf* tablet_peer_lookup() override;
 
   Heartbeater* heartbeater() { return heartbeater_.get(); }
 
@@ -136,7 +136,8 @@ class TabletServer : public server::RpcAndWebServerBase, public TabletServerIf {
 
   CHECKED_STATUS PopulateLiveTServers(const master::TSHeartbeatResponsePB& heartbeat_resp);
 
-  CHECKED_STATUS GetLiveTServers(std::vector<master::TSInformationPB> *live_tservers) const {
+  CHECKED_STATUS GetLiveTServers(
+      std::vector<master::TSInformationPB> *live_tservers) const {
     std::lock_guard<simple_spinlock> l(lock_);
     *live_tservers = live_tservers_;
     return Status::OK();
@@ -144,6 +145,8 @@ class TabletServer : public server::RpcAndWebServerBase, public TabletServerIf {
 
   CHECKED_STATUS GetTabletStatus(const GetTabletStatusRequestPB* req,
                                  GetTabletStatusResponsePB* resp) const override;
+
+  bool LeaderAndReady(const TabletId& tablet_id, bool allow_stale = false) const override;
 
   const std::string& permanent_uuid() const { return fs_manager_->uuid(); }
 
@@ -184,6 +187,13 @@ class TabletServer : public server::RpcAndWebServerBase, public TabletServerIf {
 
   // Returns the file descriptor of this tablet server's shared memory segment.
   int GetSharedMemoryFd();
+
+  // Currently only used by cdc.
+  virtual int32_t cluster_config_version() const {
+    return std::numeric_limits<int32_t>::max();
+  }
+
+  client::TransactionPool* TransactionPool() override;
 
  protected:
   virtual CHECKED_STATUS RegisterServices();
@@ -247,7 +257,12 @@ class TabletServer : public server::RpcAndWebServerBase, public TabletServerIf {
   void AutoInitServiceFlags();
 
   // Shared memory owned by the tablet server.
-  TServerSharedMemory shared_memory_;
+  TServerSharedObject shared_object_;
+
+  std::atomic<client::TransactionPool*> transaction_pool_{nullptr};
+  std::mutex transaction_pool_mutex_;
+  std::unique_ptr<client::TransactionManager> transaction_manager_holder_;
+  std::unique_ptr<client::TransactionPool> transaction_pool_holder_;
 
   DISALLOW_COPY_AND_ASSIGN(TabletServer);
 };

@@ -8,7 +8,8 @@ import { getUniversePerNodeStatus, getUniversePerNodeStatusResponse,
 
 function mapStateToProps(state) {
   return {
-    universe: state.universe
+    universe: state.universe,
+    customer: state.customer
   };
 }
 
@@ -38,7 +39,6 @@ const mapDispatchToProps = (dispatch) => {
 
     getUniversePerNodeMetrics: (uuid) => {
       dispatch(getUniversePerNodeMetrics(uuid)).then((perNodeResponse) => {
-        console.log(perNodeResponse);
         dispatch(getUniversePerNodeMetricsResponse(perNodeResponse.payload));
       });
     },

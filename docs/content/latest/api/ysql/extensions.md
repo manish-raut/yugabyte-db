@@ -12,11 +12,11 @@ isTocNested: true
 showAsideToc: true
 ---
 
-This page documents how to install and use PostgreSQL extensions that are tested to work with YSQL. Note that since Yugabyte DB’s storage architecture is not the same as that of native PostgreSQL, PostgreSQL extensions especially those that interact with the storage layer are not expected to work as-is on Yugabyte DB. We intend to incrementally develop support for as many extensions as possible. 
+This page documents how to install and use PostgreSQL extensions that are tested to work with YSQL. Note that since YugabyteDB’s storage architecture is not the same as that of native PostgreSQL, PostgreSQL extensions especially those that interact with the storage layer are not expected to work as-is on YugabyteDB. We intend to incrementally develop support for as many extensions as possible. 
 
 ## Use Included Extensions
 
-These are extensions that are included in the standard Yugabyte DB distribution and can be enabled in YSQL by simply running the `CREATE EXTENSION` statememt.
+These are extensions that are included in the standard YugabyteDB distribution and can be enabled in YSQL by simply running the `CREATE EXTENSION` statememt.
 
 ### pgcrypto
 
@@ -28,7 +28,7 @@ The `pgcrypto` extension provides various cryptographic functions.
 -->
 <h4> Example </h4>
 
-```sql
+```postgresql
 CREATE EXTENSION pgcrypto;
 CREATE TABLE pgcrypto_example(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), content text, digest text);
 INSERT INTO pgcrypto_example (content, digest) values ('abc', digest('abc', 'sha1'));
@@ -51,7 +51,7 @@ The `fuzzystrmatch` extension provides several functions to determine similariti
 
 <h4> Example </h4>
 
-```sql
+```postgresql
 CREATE EXTENSION fuzzystrmatch;
 SELECT levenshtein('Yugabyte', 'yugabyte'), metaphone('yugabyte', 8);
 ```
@@ -77,7 +77,7 @@ The specific extensions currently supported in YSQL are:
 
 1. Set up a table with triggers for tracking modification time and user (role).
     Connect with `ysqlsh` and run the commands below.
-    ```sql
+    ```postgresql
     CREATE EXTENSION insert_username;
     CREATE EXTENSION moddatetime;
 
@@ -102,7 +102,7 @@ The specific extensions currently supported in YSQL are:
 2. Insert some rows.
     Each insert should add the current role as `username` and the current timestamp as `moddate`.
 
-    ```sql
+    ```postgresql
     SET ROLE yugabyte;
     INSERT INTO spi_test VALUES(1, 'desc1');
 
@@ -135,7 +135,7 @@ The specific extensions currently supported in YSQL are:
 3. Update some rows.
     Should update both `username`  and `moddate` accordingly.
 
-    ```sql
+    ```postgresql
     UPDATE spi_test SET content = 'desc1_updated' WHERE id = 1;
     UPDATE spi_test SET content = 'desc3_updated' WHERE id = 3;
 
@@ -170,12 +170,12 @@ Typically extensions need three types of files:
 - SQL files (`<name>--<version>.sql`)
 - Control files (`<name>.control`)
 
-In order to install an extension you need to copy these files into the respective directories of your Yugabyte installation.
+In order to install an extension you need to copy these files into the respective directories of your YugabyteDB installation.
 
 
 Shared library files will be in the `pkglibdir` directory while SQL and control files should be in the `extension` subdirectory of the `libdir` directory.
 To find these directories on your local installation, you can use Yugabyte's `pg_config` executable.
-First, alias it to `yb_pg_config` by replacing `<yugabyte-path>` with the path to your Yugabyte installation in the command below and then running it.  
+First, alias it to `yb_pg_config` by replacing `<yugabyte-path>` with the path to your YugabyteDB installation in the command below and then running it.  
 ```sh
 $ alias yb_pg_config=/<yugabyte-path>/postgres/bin/pg_config
 ```
@@ -201,7 +201,7 @@ $ ls "$(pg_config --pkglibdir)" | grep <name>
 $ ls "$(pg_config --sharedir)"/extension/ | grep <name>
 ```
 
-Copy those files to the Yugabyte installation.
+Copy those files to the YugabyteDB installation.
 Restart the cluster (or the respective node in a multi-node install).
 Finally, connect to the cluster with `ysqlsh` and run the `CREATE EXTENSION` statement to create the extension.
 
@@ -228,7 +228,7 @@ For instance, on macOS, you can either
     $ brew install postgres && brew install postgis
     ```
 
-Now follow the instructions described above to copy the needed files into your Yugabyte installation, and then create 
+Now follow the instructions described above to copy the needed files into your YugabyteDB installation, and then create 
 the extension.
 
 ```sh
@@ -282,7 +282,7 @@ This might take a couple of minutes.
 5. Run some sample queries.
     Connect with `ysqlsh` and run:
 
-    ```sql
+    ```postgresql
     SELECT name, area_km2, ST_Area(geom), ST_Area(geom)/area_km2 AS area_ratio FROM "geo_export" LIMIT 10;
     ```
 
@@ -302,7 +302,7 @@ This might take a couple of minutes.
     (10 rows)
     ```
 
-    ```sql
+    ```postgresql
     SELECT a.name, b.name FROM "geo_export" AS a, "geo_export" AS b
     WHERE ST_Intersects(a.geom, b.geom) AND a.name LIKE 'University of Alberta';
     ```
@@ -344,7 +344,7 @@ $ cp -v "$(pg_config --pkglibdir)"/*uuid-ossp*.so "$(yb_pg_config --pkglibdir)" 
 
 Connect with `ysqlsh` and run:
 
-```sql
+```postgresql
 SELECT uuid_generate_v1(), uuid_generate_v4(), uuid_nil();
 ```
 

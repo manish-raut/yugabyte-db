@@ -107,9 +107,11 @@ class ConsensusPeersTest : public YBTest {
         metric_entity_,
         log_.get(),
         nullptr /* server_tracker */,
+        nullptr /* parent_tracker */,
         FakeRaftPeerPB(kLeaderUuid),
         kTabletId,
         clock_,
+        nullptr /* consensus_context */,
         raft_pool_->NewToken(ThreadPool::ExecutionMode::SERIAL)));
     message_queue_->RegisterObserver(consensus_.get());
 
@@ -134,8 +136,8 @@ class ConsensusPeersTest : public YBTest {
     auto proxy_ptr = new DelayablePeerProxy<NoOpTestPeerProxy>(
         raft_pool_.get(), new NoOpTestPeerProxy(raft_pool_.get(), peer_pb));
     *peer = CHECK_RESULT(Peer::NewRemotePeer(
-        peer_pb, kTabletId, kLeaderUuid, message_queue_.get(), raft_pool_token_.get(),
-        PeerProxyPtr(proxy_ptr), nullptr /* consensus */, messenger_.get()));
+        peer_pb, kTabletId, kLeaderUuid, PeerProxyPtr(proxy_ptr), message_queue_.get(),
+        raft_pool_token_.get(), nullptr /* consensus */, messenger_.get()));
     return proxy_ptr;
   }
 
@@ -318,8 +320,8 @@ TEST_F(ConsensusPeersTest, TestRemotePeers) {
 TEST_F(ConsensusPeersTest, TestCloseWhenRemotePeerDoesntMakeProgress) {
   auto mock_proxy = new MockedPeerProxy(raft_pool_.get());
   auto peer = ASSERT_RESULT(Peer::NewRemotePeer(
-      FakeRaftPeerPB(kFollowerUuid), kTabletId, kLeaderUuid, message_queue_.get(),
-      raft_pool_token_.get(), PeerProxyPtr(mock_proxy), nullptr /* consensus */,
+      FakeRaftPeerPB(kFollowerUuid), kTabletId, kLeaderUuid, PeerProxyPtr(mock_proxy),
+      message_queue_.get(), raft_pool_token_.get(), nullptr /* consensus */,
       messenger_.get()));
 
   // Make the peer respond without making any progress -- it always returns
@@ -347,8 +349,8 @@ TEST_F(ConsensusPeersTest, TestCloseWhenRemotePeerDoesntMakeProgress) {
 TEST_F(ConsensusPeersTest, TestDontSendOneRpcPerWriteWhenPeerIsDown) {
   auto mock_proxy = new MockedPeerProxy(raft_pool_.get());
   auto peer = ASSERT_RESULT(Peer::NewRemotePeer(
-      FakeRaftPeerPB(kFollowerUuid), kTabletId, kLeaderUuid, message_queue_.get(),
-      raft_pool_token_.get(), PeerProxyPtr(mock_proxy), nullptr /* consensus */,
+      FakeRaftPeerPB(kFollowerUuid), kTabletId, kLeaderUuid, PeerProxyPtr(mock_proxy),
+      message_queue_.get(), raft_pool_token_.get(), nullptr /* consensus */,
       messenger_.get()));
 
   auto se = ScopeExit([&peer] {

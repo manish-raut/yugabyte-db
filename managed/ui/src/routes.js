@@ -26,12 +26,12 @@ import Profile from './pages/Profile';
 import YugawareLogs from './pages/YugawareLogs';
 import Importer from './pages/Importer';
 import Certificates from './pages/Certificates';
+import Schedules from './pages/Schedules';
 import Releases from './pages/Releases';
+import { isDefinedNotNull } from './utils/ObjectUtils';
 
 const clearCredentials = () => {
-  // Don't clear all of localStorage so we can keep the introduction item
-  localStorage.removeItem('apiToken');
-  localStorage.removeItem('authToken');
+  localStorage.clear();
   Cookies.remove('apiToken');
   Cookies.remove('authToken');
   Cookies.remove('customerId');
@@ -51,6 +51,11 @@ function validateSession(store, replacePath, callback) {
         store.dispatch(insecureLoginResponse(response));
         localStorage.setItem('apiToken', response.payload.data.apiToken);
         localStorage.setItem('customerId', response.payload.data.customerUUID);
+
+        // Show the intro modal if OSS version
+        if (localStorage.getItem('__yb_new_user__') == null) {
+          localStorage.setItem('__yb_new_user__', true);
+        }
         browserHistory.push('/');
       }
     });
@@ -68,7 +73,7 @@ function validateSession(store, replacePath, callback) {
     store.dispatch(validateToken())
       .then((response) => {
         if (response.error) {
-          const { status } = response.payload.response;
+          const { status } = isDefinedNotNull(response.payload.response) ? response.payload.response : {};
           switch (status) {
             case 403:
               store.dispatch(resetCustomer());
@@ -91,6 +96,9 @@ function validateSession(store, replacePath, callback) {
         }
       });
   }
+  // TODO: Customer configs are sometimes not updated because callback does not wait for tokens
+  // to be validated. However, having callback wait for the response will cause an infinite loop
+  // when redirecting (e.g. showOrRedirect).
   callback();
 }
 
@@ -135,9 +143,11 @@ export default (store) => {
         <Route path="/alerts" component={Alerts}/>
         <Route path="/help" component={Help}/>
         <Route path="/profile" component={Profile}/>
+        <Route path="/profile/:tab" component={Profile}/>
         <Route path="/logs" component={YugawareLogs}/>
         <Route path="/releases" component={Releases}/>
         <Route path="/certificates" component={Certificates}/>
+        <Route path="/schedules" component={Schedules}/>
       </Route>
     </Route>
   );

@@ -64,10 +64,12 @@ using namespace std::literals;
 DEFINE_int32(heartbeat_rpc_timeout_ms, 15000,
              "Timeout used for the TS->Master heartbeat RPCs.");
 TAG_FLAG(heartbeat_rpc_timeout_ms, advanced);
+TAG_FLAG(heartbeat_rpc_timeout_ms, runtime);
 
 DEFINE_int32(heartbeat_interval_ms, 1000,
              "Interval at which the TS heartbeats to the master.");
 TAG_FLAG(heartbeat_interval_ms, advanced);
+TAG_FLAG(heartbeat_interval_ms, runtime);
 
 DEFINE_int32(heartbeat_max_failures_before_backoff, 3,
              "Maximum number of consecutive heartbeat failures until the "
@@ -438,9 +440,10 @@ Status Heartbeater::Thread::TryHeartbeat() {
   }
 
   RpcController rpc;
-  rpc.set_timeout(MonoDelta::FromSeconds(10));
+  rpc.set_timeout(MonoDelta::FromMilliseconds(FLAGS_heartbeat_rpc_timeout_ms));
 
   req.set_config_index(server_->GetCurrentMasterIndex());
+  req.set_cluster_config_version(server_->cluster_config_version());
 
   {
     VLOG_WITH_PREFIX(2) << "Sending heartbeat:\n" << req.DebugString();
@@ -481,9 +484,20 @@ Status Heartbeater::Thread::TryHeartbeat() {
       RETURN_NOT_OK(server_->SetUniverseKeyRegistry(resp.universe_key_registry()));
     }
 
+    // Check for CDC Universe Replication.
     if (resp.has_consumer_registry()) {
-      RETURN_NOT_OK(static_cast<enterprise::TabletServer*>(server_)->SetConsumerRegistry(
-          resp.consumer_registry()));
+      int32_t cluster_config_version = -1;
+      if (!resp.has_cluster_config_version()) {
+        YB_LOG_EVERY_N_SECS(INFO, 30)
+            << "Invalid heartbeat response without a cluster config version";
+      } else {
+        cluster_config_version = resp.cluster_config_version();
+      }
+      RETURN_NOT_OK(static_cast<enterprise::TabletServer*>(server_)->
+          SetConfigVersionAndConsumerRegistry(cluster_config_version, &resp.consumer_registry()));
+    } else if (resp.has_cluster_config_version()) {
+      RETURN_NOT_OK(static_cast<enterprise::TabletServer*>(server_)->
+          SetConfigVersionAndConsumerRegistry(resp.cluster_config_version(), nullptr));
     }
 
     // At this point we know resp is a successful heartbeat response from the master so set it as
