@@ -73,7 +73,7 @@ $ helm search yugabytedb/yugaware
 
 ```sh
 NAME               	CHART VERSION	APP VERSION	  DESCRIPTION                                                 
-yugabytedb/yugaware	2.0.4        	2.0.4.0-b7 	  YugaWare is YugaByte Database's Orchestration and Managem...
+yugabytedb/yugaware	  2.0.4        	  2.0.4.0-b7 	  YugaWare is YugaByte Database's Orchestration and Managem...
 ```
 
 ### Apply the secret 
@@ -158,7 +158,7 @@ $ helm history yw-demo
 ```
 
 ```sh
-REVISION	  UPDATED                 	STATUS  	CHART         	APP VERSION	 DESCRIPTION     
+REVISION	  UPDATED                 	  STATUS  	   CHART         	APP VERSION	 DESCRIPTION     
 1       	Thu Nov 21 18:43:41 2019	DEPLOYED	yugaware-2.0.4	2.0.4.0-b7 	 Install complete
 ```
 
