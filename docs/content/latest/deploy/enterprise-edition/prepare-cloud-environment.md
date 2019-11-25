@@ -28,7 +28,7 @@ A dedicated host or virtual machine (VM) is needed to run YugaWare. For more det
   </li>
   <li>
     <a href="#prepare-kubernetes" class="nav-link" id="prepare-kubernetes-tab" data-toggle="tab" role="tab" aria-controls="prepare-kubernetes" aria-selected="true">
-      <i class="icon-kubernetes" aria-hidden="true"></i>
+      <i class="fas fa-cubes" aria-hidden="true"></i>
       Kubernetes
     </a>
   </li>
