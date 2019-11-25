@@ -41,7 +41,7 @@ A dedicated host or virtual machine (VM) is needed to run YugaWare. For more det
   <div id="prepare-cloud-gcp" class="tab-pane fade" role="tabpanel" aria-labelledby="prepare-cloud-gcp-tab">
     {{% includeMarkdown "prepare-cloud/gcp.md" /%}}
   </div>
-  <div id="prepare-cloud-aws" class="tab-pane fade show active" role="tabpanel" aria-labelledby="prepare-kubernetes-tab">
+  <div id="prepare-kubernetes" class="tab-pane fade" role="tabpanel" aria-labelledby="prepare-kubernetes-tab">
     {{% includeMarkdown "prepare-cloud/k8s.md" /%}}
   </div>
 </div>
