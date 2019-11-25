@@ -50,7 +50,8 @@ Tiller (the Helm server-side component) has been upgraded to the current version
 Happy Helming!
 ```
 
-### Add Yugabyte repo which has both yugayte and yugaware
+### Add yugaware repo
+ Add yugabytedb repo which has both yugabyte and yugaware charts
 
 You can do this as shown below.
 
@@ -70,7 +71,13 @@ $ helm repo update
 $ helm search yugabytedb/yugaware
 ```
 
-### Apply the secret file (license for yugaware) which you have received from the sales team
+```sh
+NAME               	CHART VERSION	APP VERSION	  DESCRIPTION                                                 
+yugabytedb/yugaware	2.0.4        	2.0.4.0-b7 	  YugaWare is YugaByte Database's Orchestration and Managem...
+```
+
+### Apply the secret 
+Apply the secret file (license for yugaware) which you have received from the sales team
 ```sh
 kubectl apply -f yugabyte-secret.yml -n yw-demo
 ```
@@ -151,7 +158,7 @@ $ helm history yw-demo
 ```
 
 ```sh
-REVISION	UPDATED                 	STATUS  	CHART         	APP VERSION	 DESCRIPTION     
+REVISION	  UPDATED                 	STATUS  	CHART         	APP VERSION	 DESCRIPTION     
 1       	Thu Nov 21 18:43:41 2019	DEPLOYED	yugaware-2.0.4	2.0.4.0-b7 	 Install complete
 ```
 
