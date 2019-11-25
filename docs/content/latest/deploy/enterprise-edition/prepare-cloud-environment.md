@@ -26,6 +26,12 @@ A dedicated host or virtual machine (VM) is needed to run YugaWare. For more det
       GCP
     </a>
   </li>
+  <li>
+    <a href="#prepare-kubernetes" class="nav-link" id="prepare-kubernetes-tab" data-toggle="tab" role="tab" aria-controls="prepare-kubernetes" aria-selected="true">
+      <i class="icon-kubernetes" aria-hidden="true"></i>
+      Kubernetes
+    </a>
+  </li>
 </ul>
 
 <div class="tab-content">
@@ -34,5 +40,8 @@ A dedicated host or virtual machine (VM) is needed to run YugaWare. For more det
   </div>
   <div id="prepare-cloud-gcp" class="tab-pane fade" role="tabpanel" aria-labelledby="prepare-cloud-gcp-tab">
     {{% includeMarkdown "prepare-cloud/gcp.md" /%}}
+  </div>
+  <div id="prepare-cloud-aws" class="tab-pane fade show active" role="tabpanel" aria-labelledby="prepare-kubernetes-tab">
+    {{% includeMarkdown "prepare-cloud/k8s.md" /%}}
   </div>
 </div>
